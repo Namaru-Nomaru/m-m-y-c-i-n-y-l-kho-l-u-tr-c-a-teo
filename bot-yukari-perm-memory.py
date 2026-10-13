@@ -1741,10 +1741,10 @@ async def on_message(message: discord.Message):
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        msg = "Lệnh này chỉ dành cho chủ nhân của Alice thôi nha~"
+        msg = "Xin lỗi nhưng ngươi không có quyền sử dụng lệnh này, lệnh này chỉ dành cho cha Yukari thôi nha~"
     else:
         log.error("Lỗi lệnh slash: %s", error, exc_info=error)
-        msg = "Ôi, có chuyện gì đó trục trặc rồi… cậu thử lại sau nhé?"
+        msg = "Ôi, có chuyện gì đó trục trặc rồi… Ngươi thử lại sau nhé?"
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
