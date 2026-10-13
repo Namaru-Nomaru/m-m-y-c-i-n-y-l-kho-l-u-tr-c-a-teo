@@ -601,7 +601,7 @@ async def retrieve_relevant_contexts(
 async def delete_user_memories(user_id: str) -> bool:
     """Xóa toàn bộ ký ức vĩnh viễn của user. Trả về True nếu mọi nơi đều xóa thành công."""
     if user_id in (GLOBAL_USER_ID, LEGACY_GLOBAL_USER_ID):
-        log.warning("Từ chối xóa ký ức với user_id dành riêng cho Global Memory.")
+        log.warning("Ta từ chối xóa ký ức với user_id dành riêng cho Global Memory. Vì Ngươi không xứng đáng làm điều đó")
         return False
     ok = True
     if use_mongo and memories_collection is not None:
