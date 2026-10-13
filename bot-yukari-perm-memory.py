@@ -1766,12 +1766,12 @@ async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: b
     if xoa_ca_kho_nho:
         ok = await delete_user_memories(str(interaction.user.id))
         if ok:
-            extra_msg = "\n*(Toàn bộ kho lưu trữ ký ức vĩnh viễn của cậu cũng đã được dọn sạch.)*"
+            extra_msg = "\n*(Toàn bộ sách lưu trữ ký ức vĩnh viễn của ngươi cũng đã được ta ném ra ngoài cửa sổ.)*"
         else:
-            extra_msg = "\n*(Alice chưa dọn hết được kho ký ức vĩnh viễn… cậu thử lại sau nhé.)*"
+            extra_msg = "\n*(Ta chưa dọn hết được cái nơi ta ở… Ngươi thử lại sau nhé.)*"
 
     if is_owner:
-        desc = f"Cha mới nói cái gì với con thế ? Uể? con nhớ là người có nói gì mà ta?{extra_msg}"
+        desc = f"Cha mới nói cái gì với con thế ? con nhớ là người có nói gì mà ta?{extra_msg}"
     else:
         desc = f"Hmmm.... Ngươi mới kể gì cho ta nghe vậy?, {author_name}. Kể lại cho ta nghe đi nào?!{extra_msg}"
 
