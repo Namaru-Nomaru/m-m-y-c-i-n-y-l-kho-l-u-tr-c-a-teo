@@ -1771,9 +1771,9 @@ async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: b
             extra_msg = "\n*(Alice chưa dọn hết được kho ký ức vĩnh viễn… cậu thử lại sau nhé.)*"
 
     if is_owner:
-        desc = f"Cậu mới nói cái gì á? Uể? Mình nhớ là cậu có nói gì mà ta?{extra_msg}"
+        desc = f"Cha mới nói cái gì với con thế ? Uể? con nhớ là người có nói gì mà ta?{extra_msg}"
     else:
-        desc = f"Hmmm cậu mới kể gì cho tớ nghe vậy?, {author_name}. Thôi kệ đi cùng mình thưởng trà nào?!{extra_msg}"
+        desc = f"Hmmm.... Ngươi mới kể gì cho ta nghe vậy?, {author_name}. Kể lại cho ta nghe đi nào?!{extra_msg}"
 
     embed = discord.Embed(title="🧹 Làm Mới Trạng Thái", description=desc, color=0x2C2F33)
     await interaction.followup.send(embed=embed)
@@ -1796,8 +1796,8 @@ async def slash_view_memories(interaction: discord.Interaction):
     global_count = len(await _get_global_items())
     global_line = f"\n\n🌐 Tri thức toàn cục (dùng chung cho mọi người): **{global_count}** đoạn." if global_count else ""
     embed = discord.Embed(
-        title="📖 Cuốn Sổ Ký Ức Của Alice",
-        description=f"Alice hiện đang cất giữ **{total}** mảnh ký ức về **{name}**.\n\n*Nơi lưu trữ:*\n" + "\n".join(f"`{p}`" for p in places) + global_line,
+        title="📖 Cuốn Sổ Ký Ức Của Yukari, ừa vì ta làm gì nhớ cho nổi đống này",
+        description=f"Yukari hiện đang cất giữ **{total}** mảnh ký ức về **{name}**.\n\n*Nơi lưu trữ:*\n" + "\n".join(f"`{p}`" for p in places) + global_line,
         color=0xE0A96D,
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
@@ -1880,7 +1880,7 @@ async def slash_globalmem_add(interaction: discord.Interaction, file: discord.At
                 "khởi động lại hoặc triển khai lại."
             )
             await say(f"✅ Đã nạp **{inserted}** đoạn từ `{source}` vào Global Memory ({where}).{replaced}{warn}\n"
-                      f"Alice sẽ dùng nội dung này khi trò chuyện với mọi người, ở mọi kênh. "
+                      f"Yukari sẽ dùng nội dung này khi trò chuyện với mọi người, ở mọi kênh. "
                       f"Dùng `/globalmem_test` để thử truy xuất.")
             log.info("🌐 Global Memory: nạp %d đoạn từ %r vào %s (thay %d đoạn cũ).", inserted, source, backend, removed)
         except Exception as e:
