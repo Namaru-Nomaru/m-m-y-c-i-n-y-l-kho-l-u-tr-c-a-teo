@@ -1803,7 +1803,7 @@ async def slash_view_memories(interaction: discord.Interaction):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="globalmem_add", description="(Chủ nhân) Nạp file tri thức vào Global Memory để Alice nhớ với mọi người")
+@bot.tree.command(name="globalmem_add", description="(Chủ nhân) Nạp file tri thức vào Global Memory để Yukari nhớ với mọi người")
 @app_commands.describe(
     file="File văn bản UTF-8 (.txt, .md, .csv, .json, .log)",
     name="Tên nguồn để quản lý (mặc định là tên file). Nạp lại cùng tên sẽ thay thế bản cũ",
@@ -1830,7 +1830,7 @@ async def slash_globalmem_add(interaction: discord.Interaction, file: discord.At
     source = sanitize_source(name or file.filename)
     lock = _get_upload_lock()
     if lock.locked():
-        await say("⏳ Alice đang nạp một file khác. Cậu chờ xong rồi thử lại nhé.")
+        await say("⏳ Yukari đang nạp một file khác. Ngươi chờ ta xong rồi thử lại nhé.")
         return
 
     async with lock:
@@ -1953,7 +1953,7 @@ async def slash_globalmem_clear(interaction: discord.Interaction, xac_nhan: bool
 
 
 @bot.tree.command(name="globalmem_test", description="(Chủ nhân) Thử truy xuất Global Memory và xem điểm tương đồng")
-@app_commands.describe(cau_hoi="Câu muốn thử, ví dụ một câu mà người dùng có thể hỏi Alice")
+@app_commands.describe(cau_hoi="Ngươi muốn thử, ví dụ một câu mà ngươi dùng có thể hỏi ta, Yukari")
 @app_commands.check(_owner_only)
 async def slash_globalmem_test(interaction: discord.Interaction, cau_hoi: str):
     await interaction.response.defer(ephemeral=True)
@@ -1976,7 +1976,7 @@ async def slash_globalmem_test(interaction: discord.Interaction, cau_hoi: str):
         mark = "✅" if sim >= GLOBAL_THRESHOLD else "❌"
         preview = discord.utils.escape_markdown(text_val.replace("\n", " "))[:90]
         lines.append(f"{mark} `{sim:.3f}` · `{source}` — {preview}…")
-    desc = (f"Ngưỡng hiện tại: `{GLOBAL_THRESHOLD}` (✅ = đủ điểm để Alice dùng, tối đa {GLOBAL_TOP_K} đoạn).\n\n"
+    desc = (f"Ngưỡng hiện tại: `{GLOBAL_THRESHOLD}` (✅ = đủ điểm để Yukari dùng, tối đa {GLOBAL_TOP_K} đoạn).\n\n"
             + ("\n".join(lines) if lines else "Không có đoạn nào cùng số chiều vector với câu hỏi."))
     if skipped:
         desc += f"\n\n⚠️ {skipped} đoạn khác số chiều vector nên bị bỏ qua — hãy nạp lại bằng `/globalmem_add`."
@@ -1984,7 +1984,7 @@ async def slash_globalmem_test(interaction: discord.Interaction, cau_hoi: str):
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="persona_set", description="(Chủ nhân) Đặt chỉ dẫn riêng cho Alice khi nói chuyện với một người dùng")
+@bot.tree.command(name="persona_set", description="(Chủ nhân) Đặt chỉ dẫn riêng cho Yukari khi nói chuyện với một người dùng")
 @app_commands.describe(
     user="Người dùng (nhận diện bằng ID, không phụ thuộc tên hiển thị)",
     chi_dan="Nội dung chỉ dẫn (một dòng). Chỉ dẫn nhiều dòng thì dùng tham số file",
@@ -2000,7 +2000,7 @@ async def slash_persona_set(interaction: discord.Interaction, user: discord.User
         await interaction.followup.send(msg, ephemeral=True)
 
     if getattr(user, "bot", False):
-        await say("❌ Không đặt chỉ dẫn riêng cho tài khoản bot (Alice luôn bỏ qua tin nhắn của bot).")
+        await say("❌ Không đặt chỉ dẫn riêng cho tài khoản bot (Yukari luôn bỏ qua tin nhắn của bot).")
         return
     if bool(chi_dan and chi_dan.strip()) == bool(file):
         await say("❌ Hãy cung cấp đúng MỘT trong hai: `chi_dan` hoặc `file`.")
@@ -2070,7 +2070,7 @@ async def slash_persona_show(interaction: discord.Interaction, user: discord.Use
     await refresh_personas(force=True)
     text = get_custom_prompt_by_id(user.id)
     if not text:
-        await interaction.followup.send("Người này chưa có chỉ dẫn riêng (Alice dùng chỉ dẫn mặc định cho người thường).", ephemeral=True)
+        await interaction.followup.send("Người này chưa có chỉ dẫn riêng (Yukari dùng chỉ dẫn mặc định cho người thường).", ephemeral=True)
         return
     label = discord.utils.escape_markdown(get_custom_label(user.id) or sanitize_name(user.display_name))
     safe = text.replace("```", "ˋˋˋ")
