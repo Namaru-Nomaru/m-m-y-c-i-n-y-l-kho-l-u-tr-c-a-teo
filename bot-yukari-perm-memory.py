@@ -1614,7 +1614,7 @@ async def on_ready():
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
-            name="Người? Người mới bước vào Gensokyo à? | Cứ gọi ta là 'Yukari' đi!",
+            name="Người mới à? Ngươi mới bước vào Gensokyo à?, thế tới đây nói chuyện với ta | Cứ gọi ta là 'Yukari' đi!",
         )
     )
 
