@@ -117,7 +117,7 @@ DISCORD_PROXY = os.getenv("DISCORD_PROXY") or None          # tùy chọn: HTTP 
 # Nhân vật: chỉ dẫn riêng theo USER ID (tên hiển thị ai cũng đổi được nên không đáng tin). Quản lý bằng /persona_*.
 PERSONA_MAX_CHARS = _env_int("PERSONA_MAX_CHARS", 1500)
 PERSONA_CACHE_TTL_SEC = _env_int("PERSONA_CACHE_TTL_SEC", 300)
-PROMPT_OPERATIONAL = _env_int("PROMPT_OPERATIONAL", 0) != 0
+PROMPT_OPERATIONAL = _env_int("PROMPT_OPERATIONAL", 1) != 0
 # Mặc định tích hợp sẵn (thay cho GRIM_ID cũ): {user_id: (tên gọi, chỉ dẫn)}.
 # /persona_set có thể ghi đè; /persona_delete đưa về đúng mặc định này.
 BUILTIN_PERSONAS = {
