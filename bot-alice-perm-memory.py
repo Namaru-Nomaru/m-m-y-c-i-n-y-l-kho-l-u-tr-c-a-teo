@@ -72,7 +72,7 @@ DISCORD_TOKEN = os.getenv("DISCORD_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 MONGO_URI = os.getenv("MONGO_URI")
 VECTOR_INDEX_NAME = os.getenv("VECTOR_INDEX_NAME", "vector_index")
-SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "alice_memories.db")
+SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "yukari_memories.db")
 
 # ID số Discord của chủ nhân (thay cho việc so khớp display_name vốn dễ bị giả mạo)
 OWNER_ID = _env_int("OWNER_ID", 0)
@@ -284,8 +284,8 @@ def init_mongo():
         from pymongo import MongoClient
         client = MongoClient(MONGO_URI, serverSelectionTimeoutMS=5000)
         client.admin.command("ping")
-        memories_collection = client["alice_db"]["vector_memories"]
-        custom_prompts_collection = client["alice_db"]["custom_prompts"]
+        memories_collection = client["yukari_db"]["vector_memories"]
+        custom_prompts_collection = client["yukari_db"]["custom_prompts"]
         use_mongo = True
         log.info("✅ Đã kết nối thành công MongoDB Atlas! Ký ức Vector sẽ được lưu vĩnh viễn trên đám mây.")
     except Exception as e:
