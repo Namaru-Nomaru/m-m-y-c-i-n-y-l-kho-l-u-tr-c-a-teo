@@ -122,9 +122,9 @@ PROMPT_OPERATIONAL = _env_int("PROMPT_OPERATIONAL", 0) != 0
 # /persona_set có thể ghi đè; /persona_delete đưa về đúng mặc định này.
 BUILTIN_PERSONAS = {
     "1082184769695133716": (
-        "Grim",
-        "Người nói CHÍNH LÀ kỵ sĩ Grim — người Alice dành tình cảm đặc biệt, thầm kín. Xưng tớ gọi cậu và đối đãi "
-        "với cậu ấy đúng như phần mô tả về Grim trong mục core_dynamics ở trên.",
+        "Cha",
+        "Người nói CHÍNH LÀ Cha Namaru sao — người mà Yukari dành tình cảm đặc biệt. Xưng con gọi cha và đối đãi "
+        "với cha ấy đúng như phần mô tả về Namaru trong mục core_dynamics ở trên.",
     ),
 }
 
@@ -149,11 +149,11 @@ EMBED_QUOTA_WAIT_SEC = 30
 ATLAS_RETRY_SEC = 600            # sau khi Atlas $vectorSearch lỗi, nghỉ N giây rồi mới thử lại
 
 # Câu trả lời dự phòng (giữ đúng giọng Alice)
-MSG_EMPTY = "*nghiêng đầu, chớp mắt vài lần*\nTrang sách bỗng trắng xóa mất rồi… cậu nói lại một lần nữa được không?"
-MSG_SAFETY = "Bánh và trà, trang sách mãi lật, có ai ngoài Alice!"
-MSG_QUOTA = "Tiệc trà đã tàn rồi… lát nữa hay quay lại nha? (Hết hạn mức API)"
-MSG_QUOTA_LONG = "Trò chuyện đã lâu rồi, thôi mình ngồi nghỉ chút nha? (Hết hạn mức API Google). Chắc mẻ bánh mới sẽ tốn vài chục phút đó."
-MSG_ERROR = "...Để mình suy nghĩ chút…hmmmm."
+MSG_EMPTY = "*ngáp dài một hơi, phe phẩy quạt xếp che nửa miệng*\nGiấc mộng vừa rồi trống rỗng quá... Ngươi định nói gì với ta thế?"
+MSG_SAFETY = "*mắt đỏ trong khe nứt khẽ chớp, nụ cười nhạt hiện lên sau vành dù ren*\nRanh giới ấy không cho phép vượt qua đâu."
+MSG_QUOTA = "Cuộc trò chuyện của ngươi giữa tạm thời hoãn tại đây nhé... Khoảng không gian này đang cạn kiệt năng lượng rồi. (Hết hạn mức API)"
+MSG_QUOTA_LONG = "Ta thấy hơi mệt và muốn ngủ đông một chút đây... (Hết hạn mức API Google). Chắc phải mất kha khá thời gian để mở lại khe nứt đấy."
+MSG_ERROR = "*lục lọi trong sukima một hồi nhưng chỉ thấy toàn gối ngủ*\n...Đợi ta nghĩ ngợi chút... hmmmm."
 
 # Trạng thái lưu trữ
 use_mongo = False
@@ -190,7 +190,7 @@ def sanitize_name(name: Optional[str], limit: int = 32) -> str:
 
 
 def truncate_for_discord(text: str, limit: int = DISCORD_MSG_LIMIT) -> str:
-    """Cắt gọn tin nhắn ở ranh giới câu/dòng và đóng dấu * nếu bị lẻ (Alice dùng *hành động*)."""
+    """Cắt gọn tin nhắn ở ranh giới câu/dòng và đóng dấu * nếu bị lẻ (Yukari dùng *hành động*)."""
     if len(text) <= limit:
         return text
     cut = text[:limit]
