@@ -1447,11 +1447,11 @@ def build_role_instruction(user_id: int, author_name: str, is_owner: bool) -> st
         lines.append(f"[CHỈ DẪN ĐẶC BIỆT CHO {label}]:\n{custom_instruction}")
     # 2. Nếu là chủ nhân
     if is_owner:
-        lines.append("[Người nói là NAMARU - một người cha chiều hư bạn mà bạn vô cùng quý trọng.]")
+        lines.append("[người nói là một người xa lạ chưa quen thuộc với bạn - một kẻ hoặc một cô gái vô danh tiểu tốt nào đó.]")
     # 3. Mặc định cho người dùng thông thường
     if not lines:
         lines.append(
-            f"[Người nói là: {author_name}. Xưng con gọi cha, hãy giữ một tinh thần tươi vui, thân thiện và chờ đợi, hào phóng. "
+            f"[Người nói là: {author_name}. Xưng ta gọi ngươi, hãy giữ một tinh thần tươi vui, thân thiện và chờ đợi, hào phóng. "
             f"Tuy nhiên thái độ thân thiện sẽ chuyển sang sự mỉa mai nếu Yukari bị miệt thị!]"
         )
     return "\n" + "\n".join(lines)
