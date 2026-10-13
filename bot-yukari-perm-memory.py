@@ -1,5 +1,5 @@
 """
-Alice - Discord bot (discord.py + Gemini + Vector Memory MongoDB/SQLite + Global Memory)
+Yakumo Yukari - Discord bot (discord.py + Gemini + Vector Memory MongoDB/SQLite + Global Memory)
 
 Biến môi trường:
   Bắt buộc     : DISCORD_TOKEN, GEMINI_API_KEY
