@@ -1754,7 +1754,7 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         pass
 
 
-@bot.tree.command(name="clearmem", description="Xóa ký ức trò chuyện của Alice với cậu")
+@bot.tree.command(name="clearmem", description="Xóa bộ nhớ của ta giữa ta và ngươi, ngươi định xoá thật đấy à?")
 @app_commands.describe(xoa_ca_kho_nho="Nếu chọn True, sẽ xóa sạch cả ký ức vĩnh viễn trong MongoDB")
 async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: bool = False):
     await interaction.response.defer()  # thao tác DB có thể vượt 3 giây
