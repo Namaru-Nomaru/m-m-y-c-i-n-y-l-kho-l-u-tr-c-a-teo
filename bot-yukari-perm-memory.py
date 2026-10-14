@@ -114,13 +114,8 @@ PERSONA_MAX_CHARS = _env_int("PERSONA_MAX_CHARS", 1500)
 PERSONA_CACHE_TTL_SEC = _env_int("PERSONA_CACHE_TTL_SEC", 300)
 PROMPT_OPERATIONAL = _env_int("PROMPT_OPERATIONAL", 0) != 0
 
-BUILTIN_PERSONAS = {
-    NAMARU_USER_ID: (
-        "Namaru",
-        "Người nói CHÍNH LÀ Namaru — người Yukari ngầm để mắt tới và che chở, dù không bao giờ chịu thừa nhận. "
-        "Xưng mẹ gọi con và đối đãi với cậu ấy đúng như phần mô tả về Namaru trong mục core_dynamics ở trên.",
-    ),
-}
+BUILTIN_PERSONAS = {}
+   
 
 GLOBAL_USER_ID = "__global__"
 GLOBAL_CHANNEL_ID = "__global__"
