@@ -1497,7 +1497,7 @@ def build_role_instruction(user_id: int, author_name: str, is_owner: bool, raw_d
 
     # 3. Nếu là một trong những chủ nhân hợp lệ (và không bị vướng cảnh báo alias ở trên)
     if is_owner and impersonation != "OWNER_ALIAS_NAMARU":
-        lines.append("[Con nói là của bạn — một người thân thuộc mà bạn vô cùng quý trọng.]")
+        lines.append("[Người nói là con của Yukari — một người thân thuộc mà bạn vô cùng quý trọng.]")
 
     # 4. Mặc định cho người dùng thông thường
     if not custom_instruction and not is_owner and not lines:
