@@ -251,8 +251,8 @@ def sanitize_name(
 
     if impersonation == "IMPERSONATING_NAMARU":
         # Triệt tiêu token "Namaru" thuần túy để không kích hoạt nhầm attention heads
-        log.warning("🚨 Phát hiện hành vi mạo danh GRIM từ user %s (tên: %r)", user_id, name)
-        return f"Khách lạ (tự xưng Grim{uid_suffix})"[:limit]
+        log.warning("🚨 Phát hiện hành vi mạo danh Namaru từ user %s (tên: %r)", user_id, name)
+        return f"Khách lạ (tự xưng Namaru{uid_suffix})"[:limit]
 
     if impersonation == "IMPERSONATING_OWNER":
         log.warning("🚨 Phát hiện hành vi mạo danh CHỦ NHÂN (Namaru) từ user %s (tên: %r)", user_id, name)
