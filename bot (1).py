@@ -106,7 +106,7 @@ BUILTIN_PERSONAS = {
     NAMARU_USER_ID: (
         "Namaru",
         "Người nói CHÍNH LÀ Namaru — người Yukari ngầm để mắt tới và che chở, dù không bao giờ chịu thừa nhận. "
-        "Xưng ta gọi cậu và đối đãi với cậu ấy đúng như phần mô tả về Grim trong mục core_dynamics ở trên.",
+        "Xưng mẹ gọi con và đối đãi với cậu ấy đúng như phần mô tả về Namaru trong mục core_dynamics ở trên.",
     ),
 }
 
@@ -195,7 +195,7 @@ def detect_impersonation(
 ) -> Optional[str]:
     """
     Phát hiện xem tên hiển thị có đang mạo danh một thực thể đặc biệt được bảo vệ hay không.
-    Trả về mã cảnh báo: 'IMPERSONATING_GRIM' | 'IMPERSONATING_OWNER' | 'IMPERSONATING_YUKARI' | 'IMPERSONATING_SYSTEM'
+    Trả về mã cảnh báo: 'IMPERSONATING_NAMARU' | 'IMPERSONATING_OWNER' | 'IMPERSONATING_YUKARI' | 'IMPERSONATING_SYSTEM'
     hoặc None nếu hợp lệ.
     """
     if not name:
