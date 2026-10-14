@@ -1813,7 +1813,7 @@ async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: b
             extra_msg = "\n*(Yukari chưa dọn hết được kho ký ức vĩnh viễn… cậu thử lại sau nhé.)*"
 
     if is_owner:
-        desc = f"Ara? Cậu vừa nói gì thế? Ta lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
+        desc = f"Ara? Con vừa nói gì thế? Mej lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
     else:
         desc = f"Ufufu~ cậu vừa kể gì cho ta nghe vậy, {author_name}? Thôi kệ đi, cứ để mọi chuyện trôi qua khe hở nào~{extra_msg}"
 
