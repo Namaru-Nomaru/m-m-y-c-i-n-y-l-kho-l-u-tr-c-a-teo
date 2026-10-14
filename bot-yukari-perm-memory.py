@@ -1,22 +1,19 @@
 """
-Yakumo Yukari - Discord bot (discord.py + Gemini + Vector Memory MongoDB/SQLite + Global Memory)
+Yakumo Yukari - Discord Bot (discord.py + Gemini + Vector Memory MongoDB/SQLite + Global Memory)
 
 Biến môi trường:
   Bắt buộc     : DISCORD_TOKEN, GEMINI_API_KEY
   Khuyến nghị  : OWNER_ID (ID số Discord của chủ nhân; bỏ trống thì dùng chủ sở hữu ứng dụng Discord),
                  MONGO_URI (lưu ký ức vĩnh viễn trên MongoDB Atlas)
-  Nhân vật     : PERSONA_MAX_CHARS (1500), PERSONA_CACHE_TTL_SEC (300) — chỉ dẫn riêng theo USER ID, quản lý bằng /persona_*,
-                 PROMPT_OPERATIONAL (0 = giữ prompt rút gọn như hiện tại; 1 = khôi phục mục
-                 <operational_guidelines> và dòng "Điểm kết" của prompt gốc)
+  Nhân vật     : PERSONA_MAX_CHARS (1500), PERSONA_CACHE_TTL_SEC (300), PROMPT_OPERATIONAL (0 hoặc 1)
   Ký ức cá nhân: MEMORY_WINDOW_DAYS (30; 0 = không giới hạn), MEMORY_RETENTION_DAYS (0 = không tự xóa),
                  MEMORY_THRESHOLD (cosine thật, mặc định 0.55), EMBEDDING_MODEL, EMBEDDING_DIM (0 = mặc định model)
   Global Memory: GLOBAL_TOP_K (3), GLOBAL_MEMORY_THRESHOLD (mặc định = MEMORY_THRESHOLD), GLOBAL_CHUNK_CHARS (900),
                  GLOBAL_CHUNK_OVERLAP (100), GLOBAL_MAX_FILE_BYTES (300000), GLOBAL_MAX_CHUNKS (400 mỗi file),
                  GLOBAL_MAX_TOTAL_CHUNKS (2000 tổng cộng), GLOBAL_EMBED_BATCH (16), GLOBAL_CACHE_TTL_SEC (300)
   Gemini       : GEMINI_MODELS (cách nhau bằng dấu phẩy), GEMINI_TIMEOUT, MAX_CONCURRENT_AI
-  Chống ban IP : USER_COOLDOWN_SEC, GLOBAL_MAX_REPLIES + GLOBAL_WINDOW_SEC (trần số lượt trả lời của cả bot —
-                 tên giữ nguyên như các bản trước), CHANNEL_MUTE_SEC, GLOBAL_BACKOFF_SEC,
-                 LOGIN_BACKOFF_SEC (mặc định 900), DISCORD_PROXY (vd http://user:pass@host:port)
+  Chống ban IP : USER_COOLDOWN_SEC, GLOBAL_MAX_REPLIES, GLOBAL_WINDOW_SEC, CHANNEL_MUTE_SEC,
+                 GLOBAL_BACKOFF_SEC, LOGIN_BACKOFF_SEC (mặc định 900), DISCORD_PROXY
   Khác         : VECTOR_INDEX_NAME, SQLITE_DB_PATH, PORT
 
 Lệnh chủ nhân: /globalmem_add|list|delete|clear|test, /persona_set|list|show|delete, /sync
@@ -48,11 +45,11 @@ from google.genai import types
 
 load_dotenv()
 
-log = logging.getLogger("alice")
+log = logging.getLogger("yukari")
 
 
 # ==============================================================================
-# CẤU HÌNH
+# CẤU HÌNH HỆ THỐNG
 # ==============================================================================
 def _env_int(name: str, default: int) -> int:
     try:
@@ -74,28 +71,25 @@ MONGO_URI = os.getenv("MONGO_URI")
 VECTOR_INDEX_NAME = os.getenv("VECTOR_INDEX_NAME", "vector_index")
 SQLITE_DB_PATH = os.getenv("SQLITE_DB_PATH", "yukari_memories.db")
 
-# ID số Discord của chủ nhân (thay cho việc so khớp display_name vốn dễ bị giả mạo)
 OWNER_ID = _env_int("OWNER_ID", 0)
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
-# 0 = dùng số chiều mặc định của model (không phá vector cũ). Đặt 768 để nhẹ hơn ~4 lần,
-# nhưng khi đó phải tạo lại Atlas index (numDimensions) và vector cũ sẽ không còn so khớp được.
 EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 0)
 
-_DEFAULT_MODELS = "gemini-3.8-flash,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-3.5-flash-lite"
+_DEFAULT_MODELS = "gemini-2.5-flash,gemini-2.5-pro,gemini-2.0-flash,gemini-1.5-flash"
 GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", _DEFAULT_MODELS).split(",") if m.strip()]
-_TOTAL_MODELS = int(len(GEMINI_MODELS) - 1)
 if not GEMINI_MODELS:
-    GEMINI_MODELS = _DEFAULT_MODELS.split(",")
+    GEMINI_MODELS = [m.strip() for m in _DEFAULT_MODELS.split(",")]
+MAX_RETRIES_PER_MODEL = 2
 GEMINI_TIMEOUT = _env_float("GEMINI_TIMEOUT", 35.0)
 
-MEMORY_WINDOW_DAYS = _env_int("MEMORY_WINDOW_DAYS", 30)          # chỉ nhớ lại ký ức trong N ngày gần nhất
-MEMORY_RETENTION_DAYS = _env_int("MEMORY_RETENTION_DAYS", 0)     # tự xóa ký ức cũ hơn N ngày (0 = tắt)
-MEMORY_THRESHOLD = _env_float("MEMORY_THRESHOLD", 0.55)          # ngưỡng cosine THẬT (-1..1)
+MEMORY_WINDOW_DAYS = _env_int("MEMORY_WINDOW_DAYS", 30)
+MEMORY_RETENTION_DAYS = _env_int("MEMORY_RETENTION_DAYS", 0)
+MEMORY_THRESHOLD = _env_float("MEMORY_THRESHOLD", 0.55)
 MEMORY_TOP_K = 3
-MEMORY_MIN_CHARS = 12            # tin nhắn của người dùng ngắn hơn mức này sẽ không được lưu
-MEMORY_REPLY_MAX_CHARS = 1500    # phần trả lời của Alice lưu vào ký ức tối đa N ký tự
-MEMORY_SCAN_LIMIT = 100          # số bản ghi gần nhất quét cosine thủ công
+MEMORY_MIN_CHARS = 10
+MEMORY_REPLY_MAX_CHARS = 1500
+MEMORY_SCAN_LIMIT = 100
 
 MAX_INPUT_CHARS = 1500
 HISTORY_MAX_LINES = 8
@@ -106,69 +100,115 @@ DISCORD_MSG_LIMIT = 1950
 USER_COOLDOWN_SEC = _env_float("USER_COOLDOWN_SEC", 2.0)
 MAX_CONCURRENT_AI = _env_int("MAX_CONCURRENT_AI", 4)
 
-# Chống spam request tới Discord (tránh bị Cloudflare ban IP). Tên biến môi trường giữ nguyên như các bản trước.
-RATE_MAX_REPLIES = _env_int("GLOBAL_MAX_REPLIES", 30)       # tối đa N lượt trả lời trong RATE_WINDOW_SEC giây (cả bot)
+RATE_MAX_REPLIES = _env_int("GLOBAL_MAX_REPLIES", 30)
 RATE_WINDOW_SEC = _env_int("GLOBAL_WINDOW_SEC", 60)
-CHANNEL_MUTE_SEC = _env_int("CHANNEL_MUTE_SEC", 600)        # kênh gửi bị 403 -> im lặng N giây
-RATE_BACKOFF_SEC = _env_int("GLOBAL_BACKOFF_SEC", 600)      # gặp 429/401/Cloudflare -> dừng mọi phản hồi N giây
-LOGIN_BACKOFF_SEC = _env_int("LOGIN_BACKOFF_SEC", 900)      # đăng nhập bị 429/token sai -> chờ N giây rồi mới thoát
-DISCORD_PROXY = os.getenv("DISCORD_PROXY") or None          # tùy chọn: HTTP proxy cho cả REST lẫn gateway
+CHANNEL_MUTE_SEC = _env_int("CHANNEL_MUTE_SEC", 600)
+RATE_BACKOFF_SEC = _env_int("GLOBAL_BACKOFF_SEC", 600)
+LOGIN_BACKOFF_SEC = _env_int("LOGIN_BACKOFF_SEC", 900)
+DISCORD_PROXY = os.getenv("DISCORD_PROXY") or None
 
-# Nhân vật: chỉ dẫn riêng theo USER ID (tên hiển thị ai cũng đổi được nên không đáng tin). Quản lý bằng /persona_*.
 PERSONA_MAX_CHARS = _env_int("PERSONA_MAX_CHARS", 1500)
 PERSONA_CACHE_TTL_SEC = _env_int("PERSONA_CACHE_TTL_SEC", 300)
 PROMPT_OPERATIONAL = _env_int("PROMPT_OPERATIONAL", 1) != 0
-# Mặc định tích hợp sẵn (thay cho GRIM_ID cũ): {user_id: (tên gọi, chỉ dẫn)}.
-# /persona_set có thể ghi đè; /persona_delete đưa về đúng mặc định này.
+
 BUILTIN_PERSONAS = {
     "1082184769695133716": (
         "Cha",
-        "Người nói CHÍNH LÀ Cha Namaru sao — người mà Yukari dành tình cảm đặc biệt. Xưng con gọi cha và đối đãi "
-        "với cha ấy đúng như phần mô tả về Namaru trong mục core_dynamics ở trên.",
+        "Người nói CHÍNH LÀ Cha Namaru — người mà Yukari dành tình cảm sâu đậm và tôn kính nhất. "
+        "Xưng con gọi cha và đối đãi với cha đúng như phần mô tả về Namaru trong mục core_dynamics.",
     ),
 }
 
-# Global Memory: tri thức chung do chủ nhân nạp bằng file, dùng với MỌI người dùng/kênh/thời điểm
-GLOBAL_USER_ID = "__global__"          # "user_id" đặc biệt (không bao giờ trùng ID số của Discord)
+GLOBAL_USER_ID = "__global__"
 GLOBAL_CHANNEL_ID = "__global__"
-LEGACY_GLOBAL_USER_ID = "GLOBAL"       # dữ liệu do bản cũ (/inject_file) tạo ra — vẫn đọc/xóa/thay thế được
+LEGACY_GLOBAL_USER_ID = "GLOBAL"
 LEGACY_SOURCE_PREFIX = "Knowledge:"
 GLOBAL_TOP_K = _env_int("GLOBAL_TOP_K", 3)
 GLOBAL_THRESHOLD = _env_float("GLOBAL_MEMORY_THRESHOLD", MEMORY_THRESHOLD)
-GLOBAL_CHUNK_CHARS = _env_int("GLOBAL_CHUNK_CHARS", 900)         # độ dài tối đa mỗi đoạn (ký tự)
-GLOBAL_CHUNK_OVERLAP = _env_int("GLOBAL_CHUNK_OVERLAP", 100)     # phần gối đầu giữa hai đoạn liên tiếp
+GLOBAL_CHUNK_CHARS = _env_int("GLOBAL_CHUNK_CHARS", 900)
+GLOBAL_CHUNK_OVERLAP = _env_int("GLOBAL_CHUNK_OVERLAP", 100)
 GLOBAL_MAX_FILE_BYTES = _env_int("GLOBAL_MAX_FILE_BYTES", 300_000)
-GLOBAL_MAX_CHUNKS = _env_int("GLOBAL_MAX_CHUNKS", 400)           # tối đa số đoạn của MỘT file
-GLOBAL_MAX_TOTAL_CHUNKS = _env_int("GLOBAL_MAX_TOTAL_CHUNKS", 2000)  # trần tổng số đoạn (bảo vệ RAM)
-GLOBAL_EMBED_BATCH = _env_int("GLOBAL_EMBED_BATCH", 16)          # số đoạn nhúng trong một lần gọi API
-GLOBAL_CACHE_TTL_SEC = _env_int("GLOBAL_CACHE_TTL_SEC", 300)     # bao lâu kiểm tra lại "chữ ký" dữ liệu Global Memory
-GLOBAL_UPLOAD_DEADLINE_SEC = 780                                 # token tương tác Discord hết hạn sau 15 phút
+GLOBAL_MAX_CHUNKS = _env_int("GLOBAL_MAX_CHUNKS", 400)
+GLOBAL_MAX_TOTAL_CHUNKS = _env_int("GLOBAL_MAX_TOTAL_CHUNKS", 2000)
+GLOBAL_EMBED_BATCH = _env_int("GLOBAL_EMBED_BATCH", 16)
+GLOBAL_CACHE_TTL_SEC = _env_int("GLOBAL_CACHE_TTL_SEC", 300)
+GLOBAL_UPLOAD_DEADLINE_SEC = 780
 GLOBAL_ALLOWED_EXT = (".txt", ".md", ".markdown", ".csv", ".json", ".log")
 EMBED_RETRY_BASE_SEC = 5
 EMBED_QUOTA_WAIT_SEC = 30
-ATLAS_RETRY_SEC = 600            # sau khi Atlas $vectorSearch lỗi, nghỉ N giây rồi mới thử lại
+ATLAS_RETRY_SEC = 600
 
-# Câu trả lời dự phòng (giữ đúng giọng Alice)
+# Phản hồi mặc định chuẩn phong thái Yukari Yakumo
 MSG_EMPTY = "*ngáp dài một hơi, phe phẩy quạt xếp che nửa miệng*\nGiấc mộng vừa rồi trống rỗng quá... Ngươi định nói gì với ta thế?"
-MSG_SAFETY = "*mắt đỏ trong khe nứt khẽ chớp, nụ cười nhạt hiện lên sau vành dù ren*\nRanh giới ấy không cho phép vượt qua đâu."
-MSG_QUOTA = "Cuộc trò chuyện của ngươi giữa tạm thời hoãn tại đây nhé... Khoảng không gian này đang cạn kiệt năng lượng rồi. (Hết hạn mức API)"
-MSG_QUOTA_LONG = "Ta thấy hơi mệt và muốn ngủ đông một chút đây... (Hết hạn mức API Google). Chắc phải mất kha khá thời gian để mở lại khe nứt đấy."
+MSG_SAFETY = "*mắt đỏ trong khe nứt khẽ chớp, nụ cười nhạt hiện lên sau vành dù ren*\nRanh giới ấy không cho phép ngươi vượt qua đâu."
+MSG_QUOTA = "*thu quạt lại, thở dài nhẹ nhàng*\nKhoảng không gian này tạm thời cạn kiệt năng lượng rồi... Đợi ta nghỉ ngơi một chút nhé."
+MSG_QUOTA_LONG = "*khe nứt sukima khép hờ, bóng dáng mờ dần*\nTa thấy hơi mệt và muốn ngủ đông một chút đây... Hãy kiên nhẫn đợi ranh giới hồi phục nhé."
 MSG_ERROR = "*lục lọi trong sukima một hồi nhưng chỉ thấy toàn gối ngủ*\n...Đợi ta nghĩ ngợi chút... hmmmm."
 
-# Trạng thái lưu trữ
 use_mongo = False
 memories_collection = None
-custom_prompts_collection = None   # collection nhỏ lưu chỉ dẫn riêng theo người dùng
-_atlas_disabled_until = 0.0      # time.monotonic() — trước mốc này thì bỏ qua Atlas $vectorSearch
+custom_prompts_collection = None
+_atlas_disabled_until = 0.0
 
 ai: Optional[genai.Client] = genai.Client(api_key=GEMINI_API_KEY) if GEMINI_API_KEY else None
 
 
 # ==============================================================================
-# TOÁN HỌC & TIỆN ÍCH
+# LÀM SẠCH VĂN BẢN & BẢO MẬT DANH TÍNH (ANTI-IMPERSONATION GUARD)
 # ==============================================================================
+# Lọc bỏ: ký tự điều khiển ASCII, vô hình Unicode, RTL Override, và các thẻ cấu trúc prompt
+_UNSAFE_NAME_RE = re.compile(
+    r"[\x00-\x1f\x7f-\x9f"
+    r"\u200b-\u200f\u202a-\u202e\u2060-\u206f\ufeff"
+    r"<>\[\]{}`*_~|@#\\]"
+)
+
+
+def sanitize_name(name: Optional[str], limit: int = 32) -> str:
+    """Tầng 1: Làm sạch toàn bộ ký tự rác, ký tự điều khiển, ngăn phá vỡ prompt và markdown."""
+    cleaned = _UNSAFE_NAME_RE.sub(" ", name or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:limit] or "Người lạ"
+
+
+def resolve_author_identity(user_id: int, display_name: str, is_owner: bool) -> tuple[str, bool]:
+    """
+    Tầng 2: Chống mạo danh ngữ nghĩa (Semantic Impersonation Guard).
+    Ngăn chặn việc kẻ xấu đổi tên thành Namaru/Cha để lừa AI.
+    Trả về: (tên_sau_xử_lý, cờ_phát_hiện_mạo_danh)
+    """
+    clean_name = sanitize_name(display_name)
+    if is_owner:
+        return clean_name, False
+
+    name_lower = clean_name.lower()
+    is_imposter = False
+
+    # Kiểm tra xem tên có cố tình mạo danh Cha Namaru không
+    if "namaru" in name_lower:
+        is_imposter = True
+    else:
+        # Bắt các danh xưng thiêng liêng ở dạng từ độc lập để tránh bắt nhầm từ ghép vô hại
+        tokens = set(re.findall(r"\w+", name_lower))
+        if tokens.intersection({"cha", "father", "papa", "ba", "bố"}):
+            is_imposter = True
+
+    if is_imposter:
+        masked_name = f"Kẻ-Giả-Mạo-{clean_name}"
+        return masked_name, True
+
+    return clean_name, False
+
+
+def sanitize_source(name: Optional[str], limit: int = 80) -> str:
+    """Làm sạch tên file/nguồn tài liệu cho Global Memory."""
+    cleaned = re.sub(r"[\x00-\x1f\x7f-\x9f/\\:*?\"<>|`]", "_", name or "")
+    cleaned = re.sub(r"\s+", " ", cleaned).strip()
+    return cleaned[:limit] or "tai-lieu"
+
+
 def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
-    """Tính độ tương đồng cosin giữa 2 vector."""
+    """Tính độ tương đồng cosin chuẩn xác giữa 2 vector."""
     if not vec_a or not vec_b or len(vec_a) != len(vec_b):
         return 0.0
     dot_product = sum(a * b for a, b in zip(vec_a, vec_b))
@@ -179,18 +219,8 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot_product / (norm_a * norm_b)
 
 
-_UNSAFE_NAME_RE = re.compile(r"[\x00-\x1f\x7f<>\[\]{}`]")
-
-
-def sanitize_name(name: Optional[str], limit: int = 32) -> str:
-    """Làm sạch display_name trước khi đưa vào prompt/embed (chống prompt injection & phá định dạng)."""
-    cleaned = _UNSAFE_NAME_RE.sub(" ", name or "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned[:limit] or "Người lạ"
-
-
 def truncate_for_discord(text: str, limit: int = DISCORD_MSG_LIMIT) -> str:
-    """Cắt gọn tin nhắn ở ranh giới câu/dòng và đóng dấu * nếu bị lẻ (Yukari dùng *hành động*)."""
+    """Cắt văn bản đảm bảo vẹn toàn câu và đóng cặp dấu sao hành động của Yukari."""
     if len(text) <= limit:
         return text
     cut = text[:limit]
@@ -206,7 +236,7 @@ _bg_tasks: set = set()
 
 
 def spawn(coro) -> asyncio.Task:
-    """create_task có giữ tham chiếu — tránh việc task nền bị garbage-collect giữa chừng."""
+    """Quản lý tác vụ nền không bị Garbage Collection dọn giữa chừng."""
     task = asyncio.create_task(coro)
     _bg_tasks.add(task)
     task.add_done_callback(_bg_tasks.discard)
@@ -214,19 +244,17 @@ def spawn(coro) -> asyncio.Task:
 
 
 # ==============================================================================
-# DATABASE: SQLITE (DỰ PHÒNG) + MONGODB ATLAS
+# DATABASE LAYER (SQLITE DỰ PHÒNG + MONGODB ATLAS)
 # ==============================================================================
 def _sqlite_connect() -> sqlite3.Connection:
     return sqlite3.connect(SQLITE_DB_PATH, timeout=10)
 
 
 def _ts_sqlite(dt: datetime) -> str:
-    """Định dạng thời gian cho SQLite — trùng định dạng adapter cũ nên so sánh chuỗi vẫn đúng thứ tự."""
     return dt.isoformat(sep=" ", timespec="microseconds")
 
 
 def init_sqlite():
-    """Khởi tạo SQLite cục bộ dự phòng lưu vector embedding nếu MongoDB không khả dụng."""
     try:
         with closing(_sqlite_connect()) as conn:
             with conn:
@@ -276,7 +304,6 @@ def init_sqlite():
 
 
 def init_mongo():
-    """Kết nối MongoDB Atlas (nếu có MONGO_URI) và tạo index cần thiết."""
     global use_mongo, memories_collection, custom_prompts_collection
     if not MONGO_URI:
         return
@@ -287,9 +314,9 @@ def init_mongo():
         memories_collection = client["yukari_db"]["vector_memories"]
         custom_prompts_collection = client["yukari_db"]["custom_prompts"]
         use_mongo = True
-        log.info("✅ Đã kết nối thành công MongoDB Atlas! Ký ức Vector sẽ được lưu vĩnh viễn trên đám mây.")
+        log.info("✅ Đã kết nối thành công MongoDB Atlas! Ký ức được đồng bộ trên đám mây.")
     except Exception as e:
-        log.warning("⚠️ Không thể kết nối MongoDB (%s), chuyển sang chế độ SQLite cục bộ.", e)
+        log.warning("⚠️ Không thể kết nối MongoDB (%s), tiếp tục dùng SQLite cục bộ.", e)
         use_mongo = False
         return
 
@@ -302,17 +329,16 @@ def init_mongo():
                 name="ttl_timestamp",
             )
     except Exception as e:
-        log.warning("ℹ️ Không tạo được index MongoDB (có thể đã tồn tại với tùy chọn khác): %s", e)
+        log.warning("ℹ️ Index MongoDB có thể đã tồn tại từ trước: %s", e)
 
 
 # ==============================================================================
-# GEMINI API: GENERATION & EMBEDDING
+# GEMINI GENERATION & EMBEDDING ENGINE
 # ==============================================================================
 _ai_sem: Optional[asyncio.Semaphore] = None
 
 
 def _get_ai_sem() -> asyncio.Semaphore:
-    """Tạo semaphore lười (lazy) để gắn đúng event loop đang chạy."""
     global _ai_sem
     if _ai_sem is None:
         _ai_sem = asyncio.Semaphore(max(1, MAX_CONCURRENT_AI))
@@ -320,7 +346,6 @@ def _get_ai_sem() -> asyncio.Semaphore:
 
 
 def _classify_gemini_error(e: Exception) -> str:
-    """Trả về 'quota' | 'missing' | 'retry' | 'other'."""
     code = getattr(e, "code", None)
     text = str(e).upper()
     if code == 429 or "429" in text or "RESOURCE_EXHAUSTED" in text:
@@ -333,8 +358,6 @@ def _classify_gemini_error(e: Exception) -> str:
 
 
 def _extract_text(resp) -> tuple[Optional[str], bool]:
-    """Lấy text từ phản hồi Gemini. Trả về (text, bị_chặn_an_toàn).
-    Lưu ý: SDK mới KHÔNG ném exception khi bị chặn — resp.text chỉ là None."""
     if resp is None:
         return None, False
     try:
@@ -356,12 +379,11 @@ def _extract_text(resp) -> tuple[Optional[str], bool]:
 
 
 async def ask_gemini(contents, system_instruction, temperature=0.9) -> tuple[str, bool]:
-    """Gọi Gemini với danh sách model dự phòng. Trả về (câu_trả_lời, thành_công).
-    thành_công=False nghĩa là đây chỉ là câu dự phòng — KHÔNG nên lưu vào lịch sử/ký ức."""
+    """Gọi Gemini với cơ chế retry và fallback danh sách model chuẩn xác."""
     config = types.GenerateContentConfig(system_instruction=system_instruction, temperature=temperature)
     async with _get_ai_sem():
         for model_name in GEMINI_MODELS:
-            for attempt in range(_TOTAL_MODELS):
+            for attempt in range(MAX_RETRIES_PER_MODEL):
                 try:
                     resp = await asyncio.wait_for(
                         ai.aio.models.generate_content(model=model_name, contents=contents, config=config),
@@ -372,11 +394,11 @@ async def ask_gemini(contents, system_instruction, temperature=0.9) -> tuple[str
                     break
                 except Exception as e:
                     kind = _classify_gemini_error(e)
-                    log.warning("Model %s lỗi (%s): %s", model_name, kind, str(e)[:150])
+                    log.warning("Model %s lỗi (%s, lần %d): %s", model_name, kind, attempt + 1, str(e)[:150])
                     if kind == "retry" and attempt == 0:
                         await asyncio.sleep(1.0)
                         continue
-                    break  # quota / không tồn tại / lỗi khác -> thử model tiếp theo
+                    break
 
                 text, blocked = _extract_text(resp)
                 if text:
@@ -386,7 +408,6 @@ async def ask_gemini(contents, system_instruction, temperature=0.9) -> tuple[str
 
 
 async def get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> list[float]:
-    """Tạo vector embedding bất đồng bộ từ text."""
     if not text or not text.strip():
         return []
     try:
@@ -409,24 +430,20 @@ async def get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> lis
 
 
 # ==============================================================================
-# QUẢN LÝ VECTOR STORE (MONGODB ATLAS + FALLBACK SQLITE)
+# VECTOR STORE & MEMORY RECALL
 # ==============================================================================
 async def store_context_memory(user_id: str, channel_id: str, author_name: str, user_text: str, reply_text: str):
-    """Embedding một lượt hội thoại và lưu vào Vector Store (MongoDB hoặc SQLite).
-    Bộ lọc độ dài/lệnh được áp dụng lên tin nhắn GỐC của người dùng (không phải cả đoạn đã ghép)."""
     user_clean = user_text.strip()
     if len(user_clean) < MEMORY_MIN_CHARS or user_clean.startswith(("!", "/")):
-        log.info("💾 Bỏ qua lưu ký ức: tin nhắn quá ngắn hoặc là câu lệnh.")
         return
 
     reply_clean = reply_text.strip()
     if len(reply_clean) > MEMORY_REPLY_MAX_CHARS:
         reply_clean = reply_clean[:MEMORY_REPLY_MAX_CHARS] + "..."
-    memory_text = f"{author_name}: {user_clean}\nAlice: {reply_clean}"
+    memory_text = f"{author_name}: {user_clean}\nYukari: {reply_clean}"
 
     vector = await get_embedding(memory_text, task_type="RETRIEVAL_DOCUMENT")
     if not vector:
-        log.warning("💾 Không tạo được embedding nên chưa lưu ký ức lượt này (xem dòng lỗi embedding phía trên).")
         return
 
     now = datetime.now(timezone.utc)
@@ -438,14 +455,14 @@ async def store_context_memory(user_id: str, channel_id: str, author_name: str, 
             "author_name": author_name,
             "text": memory_text,
             "embedding": vector,
-            "timestamp": now,  # kiểu Date của BSON — truy vấn cũng phải dùng datetime
+            "timestamp": now,
         }
         try:
             await asyncio.to_thread(memories_collection.insert_one, record)
             log.info("💾 Đã lưu ký ức vào MongoDB (vector %d chiều).", len(vector))
             return
         except Exception as e:
-            log.warning("⚠️ Lỗi ghi MongoDB: %s, chuyển lưu vào SQLite dự phòng.", e)
+            log.warning("⚠️ Lỗi ghi MongoDB: %s, chuyển sang SQLite.", e)
 
     def _save_sqlite():
         with closing(_sqlite_connect()) as conn:
@@ -465,7 +482,6 @@ async def store_context_memory(user_id: str, channel_id: str, author_name: str, 
 
 
 def _rank_by_cosine(query_vector, rows, top_k: int, threshold: float) -> list[str]:
-    """rows: iterable các cặp (text, embedding). Trả về top_k text có cosine >= threshold."""
     scored = []
     for text_val, emb in rows:
         if not text_val or not emb:
@@ -505,13 +521,12 @@ def _search_sqlite(query_vector, user_id, channel_id, min_date, top_k, threshold
 async def _search_mongo(query_vector, user_id, channel_id, min_date, top_k, threshold) -> list[str]:
     global _atlas_disabled_until
 
-    # Tầng 1: Atlas $vectorSearch
     if time.monotonic() >= _atlas_disabled_until:
         mongo_filter = {"user_id": {"$eq": user_id}}
         if channel_id:
             mongo_filter["channel_id"] = {"$eq": channel_id}
         if min_date:
-            mongo_filter["timestamp"] = {"$gte": min_date}  # datetime, KHÔNG phải str
+            mongo_filter["timestamp"] = {"$gte": min_date}
 
         pipeline = [
             {
@@ -528,14 +543,12 @@ async def _search_mongo(query_vector, user_id, channel_id, min_date, top_k, thre
         ]
 
         def _run():
-            return list(memories_collection.aggregate(pipeline))  # duyệt cursor trong thread
+            return list(memories_collection.aggregate(pipeline))
 
         try:
             docs = await asyncio.to_thread(_run)
             matched = []
             for d in docs:
-                # Với index cosine, Atlas chuẩn hóa score = (1 + cosine) / 2 -> đổi về cosine thật
-                # để dùng chung một ngưỡng với các tầng fallback.
                 cosine = 2.0 * float(d.get("score", 0.0)) - 1.0
                 if cosine >= threshold and d.get("text"):
                     matched.append(d["text"])
@@ -543,12 +556,8 @@ async def _search_mongo(query_vector, user_id, channel_id, min_date, top_k, thre
                 return matched
         except Exception as e:
             _atlas_disabled_until = time.monotonic() + ATLAS_RETRY_SEC
-            log.info(
-                "ℹ️ Atlas $vectorSearch lỗi (index/filter chưa khai báo?): %s. "
-                "Dùng Cosine thủ công, thử lại Atlas sau %ss.", e, ATLAS_RETRY_SEC,
-            )
+            log.info("ℹ️ Atlas $vectorSearch tạm chuyển sang Cosine thủ công (%ss): %s", ATLAS_RETRY_SEC, e)
 
-    # Tầng 2: cosine thủ công trên các bản ghi gần nhất của user
     def _cosine_search():
         cond = {"user_id": user_id}
         if channel_id:
@@ -575,11 +584,9 @@ async def retrieve_relevant_contexts(
     channel_id: Optional[str] = None,
     min_date: Optional[datetime] = None,
     top_k: int = 3,
-    threshold: float = 0.59,
+    threshold: float = 0.55,
     query_vector: Optional[list] = None,
 ) -> list[str]:
-    """Trích xuất các context/ký ức liên quan nhất kèm lọc channel_id và mốc thời gian.
-    Có thể truyền sẵn query_vector để không phải nhúng lại câu hỏi."""
     if query_vector is None:
         query_vector = await get_embedding(query_text, task_type="RETRIEVAL_QUERY")
     if not query_vector:
@@ -590,7 +597,6 @@ async def retrieve_relevant_contexts(
         if matched:
             return matched
 
-    # SQLite: cũng chứa các bản ghi ghi tạm lúc MongoDB gián đoạn
     try:
         return await asyncio.to_thread(_search_sqlite, query_vector, user_id, channel_id, min_date, top_k, threshold)
     except Exception as e:
@@ -599,9 +605,8 @@ async def retrieve_relevant_contexts(
 
 
 async def delete_user_memories(user_id: str) -> bool:
-    """Xóa toàn bộ ký ức vĩnh viễn của user. Trả về True nếu mọi nơi đều xóa thành công."""
     if user_id in (GLOBAL_USER_ID, LEGACY_GLOBAL_USER_ID):
-        log.warning("Ta từ chối xóa ký ức với user_id dành riêng cho Global Memory. Vì Ngươi không xứng đáng làm điều đó")
+        log.warning("Không thể xóa user_id dành riêng của Global Memory.")
         return False
     ok = True
     if use_mongo and memories_collection is not None:
@@ -625,7 +630,6 @@ async def delete_user_memories(user_id: str) -> bool:
 
 
 async def count_user_memories(user_id: str) -> tuple[Optional[int], int]:
-    """Trả về (số_ký_ức_MongoDB hoặc None nếu không dùng, số_ký_ức_SQLite)."""
     mongo_count: Optional[int] = None
     if use_mongo and memories_collection is not None:
         try:
@@ -648,17 +652,7 @@ async def count_user_memories(user_id: str) -> tuple[Optional[int], int]:
 
 
 # ==============================================================================
-# GLOBAL MEMORY — tri thức chung do chủ nhân nạp (mọi người dùng / kênh / thời điểm đều dùng được)
-#
-# Thiết kế (rút ra từ việc gỡ lỗi hai phiên bản trước):
-#  * Mỗi lần nạp chỉ ghi vào MỘT nơi: MongoDB nếu đã kết nối (collection `vector_memories`, user_id "__global__"),
-#    nếu chưa thì SQLite (bảng riêng `global_memories`) kèm cảnh báo rõ ràng. Không ghi đôi.
-#  * Tách hẳn khỏi cửa sổ quét/bộ lọc của ký ức cá nhân -> không bị "đẩy ra" khi ký ức cá nhân tăng lên.
-#  * Tài liệu global dùng `created_at` (KHÔNG có `timestamp`) nên TTL index / dọn dẹp không bao giờ xóa chúng.
-#  * Tìm kiếm chạy trên bản sao trong RAM. Việc làm mới chỉ kiểm tra "chữ ký" dữ liệu (số lượng + mốc mới nhất);
-#    chỉ khi chữ ký đổi mới tải lại vector -> không tốn băng thông Atlas.
-#  * Nạp lại cùng tên nguồn = thay thế (ghi bản mới xong mới xóa bản cũ). Đọc/xóa/thay thế được cả dữ liệu
-#    do bản cũ (/inject_file, user_id "GLOBAL") tạo ra.
+# GLOBAL MEMORY
 # ==============================================================================
 _DOT = getattr(math, "sumprod", None) or (lambda a, b: sum(x * y for x, y in zip(a, b)))
 GLOBAL_USER_IDS = (GLOBAL_USER_ID, LEGACY_GLOBAL_USER_ID)
@@ -682,15 +676,7 @@ def _get_upload_lock() -> asyncio.Lock:
     return _upload_lock
 
 
-def sanitize_source(name: Optional[str], limit: int = 80) -> str:
-    """Tên nguồn (tên file) an toàn để lưu và hiển thị trong Discord."""
-    cleaned = _UNSAFE_NAME_RE.sub(" ", name or "")
-    cleaned = re.sub(r"\s+", " ", cleaned).strip()
-    return cleaned[:limit] or "tai-lieu"
-
-
 def decode_upload(raw: bytes) -> str:
-    """Giải mã file tải lên thành văn bản UTF-8; ném ValueError nếu là file nhị phân/sai mã hóa."""
     if b"\x00" in raw:
         raise ValueError("binary")
     try:
@@ -700,7 +686,6 @@ def decode_upload(raw: bytes) -> str:
 
 
 def _split_long(paragraph: str, max_chars: int) -> list:
-    """Tách một đoạn quá dài theo câu; câu quá dài thì cắt cứng ở ranh giới từ."""
     out, buf = [], ""
     for sentence in re.split(r"(?<=[.!?…])\s+", paragraph):
         while len(sentence) > max_chars:
@@ -727,7 +712,6 @@ def _split_long(paragraph: str, max_chars: int) -> list:
 
 
 def chunk_text(text: str, max_chars: int = 900, overlap: int = 100) -> list:
-    """Chia văn bản thành các đoạn <= max_chars, ưu tiên cắt theo đoạn văn/câu, có gối đầu `overlap` ký tự."""
     max_chars = max(200, max_chars)
     overlap = max(0, min(overlap, max_chars // 3))
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -759,7 +743,6 @@ def chunk_text(text: str, max_chars: int = 900, overlap: int = 100) -> list:
 
 
 async def get_embeddings_batch(texts: list) -> list:
-    """Nhúng nhiều đoạn trong một lần gọi API. Ném exception nếu lỗi (để bên ngoài thử lại)."""
     cfg = {"task_type": "RETRIEVAL_DOCUMENT"}
     if EMBEDDING_DIM > 0:
         cfg["output_dimensionality"] = EMBEDDING_DIM
@@ -771,18 +754,16 @@ async def get_embeddings_batch(texts: list) -> list:
     if len(vectors) == len(texts):
         return vectors
 
-    log.warning("Embedding hàng loạt trả %d/%d vector, chuyển sang nhúng từng đoạn.", len(vectors), len(texts))
     singles = []
     for t in texts:
         vec = await get_embedding(t, task_type="RETRIEVAL_DOCUMENT")
         if not vec:
-            raise RuntimeError("Không tạo được embedding cho một đoạn")
+            raise RuntimeError("Không tạo được embedding cho một đoạn văn bản")
         singles.append(vec)
     return singles
 
 
 async def embed_chunks_with_retry(chunks: list, on_progress=None, deadline: Optional[float] = None) -> list:
-    """Nhúng toàn bộ các đoạn theo lô, tự thử lại khi gặp giới hạn tốc độ. Lỗi cuối cùng được ném ra."""
     vectors: list = []
     for i in range(0, len(chunks), max(1, GLOBAL_EMBED_BATCH)):
         batch = chunks[i:i + max(1, GLOBAL_EMBED_BATCH)]
@@ -796,8 +777,7 @@ async def embed_chunks_with_retry(chunks: list, on_progress=None, deadline: Opti
                 wait = (EMBED_QUOTA_WAIT_SEC if _classify_gemini_error(e) == "quota" else EMBED_RETRY_BASE_SEC) * attempt
                 if deadline is not None and time.monotonic() + wait > deadline:
                     raise
-                log.warning("Nhúng lô %d thất bại (lần %d): %s — thử lại sau %ss.", i // max(1, GLOBAL_EMBED_BATCH) + 1,
-                            attempt, str(e)[:120], wait)
+                log.warning("Nhúng lô thất bại (lần %d): %s — thử lại sau %ss.", attempt, str(e)[:120], wait)
                 await asyncio.sleep(wait)
         if on_progress:
             await on_progress(len(vectors), len(chunks))
@@ -805,7 +785,6 @@ async def embed_chunks_with_retry(chunks: list, on_progress=None, deadline: Opti
 
 
 def invalidate_global_cache():
-    """Báo cho bộ nhớ đệm biết dữ liệu vừa đổi: lần truy xuất kế tiếp sẽ nạp lại ngay."""
     _global_cache["dirty"] = True
     _global_cache["retry_after"] = 0.0
 
@@ -815,7 +794,6 @@ def _global_mongo_on() -> bool:
 
 
 def _strip_legacy(name: Optional[str], legacy: bool) -> str:
-    """Tên nguồn hiển thị: bản cũ lưu dạng "Knowledge:tên-file"."""
     name = name or "(không tên)"
     if legacy and name.startswith(LEGACY_SOURCE_PREFIX):
         name = name[len(LEGACY_SOURCE_PREFIX):] or "(không tên)"
@@ -823,7 +801,6 @@ def _strip_legacy(name: Optional[str], legacy: bool) -> str:
 
 
 def _to_utc(value) -> Optional[datetime]:
-    """Chuẩn hóa thời điểm (datetime của Mongo hoặc chuỗi của SQLite) về datetime UTC có múi giờ."""
     if isinstance(value, datetime):
         return value if value.tzinfo else value.replace(tzinfo=timezone.utc)
     if isinstance(value, str):
@@ -843,7 +820,6 @@ def _loads(emb_json):
 
 
 def _sqlite_delete_source(source: str) -> int:
-    """Xóa một nguồn khỏi SQLite (bảng mới + dòng cũ do bản trước ghi). Trả về số dòng đã xóa."""
     with closing(_sqlite_connect()) as conn:
         with conn:
             n = conn.execute("DELETE FROM global_memories WHERE source = ?", (source,)).rowcount
@@ -855,9 +831,6 @@ def _sqlite_delete_source(source: str) -> int:
 
 
 async def add_global_memory(source: str, chunks: list, vectors: list) -> tuple:
-    """Ghi các đoạn vào MỘT nơi duy nhất (MongoDB nếu đã kết nối, nếu không thì SQLite).
-    Bản cũ cùng tên nguồn chỉ bị xóa SAU khi bản mới đã ghi thành công.
-    Trả về (số_đoạn_mới, số_đoạn_cũ_đã_thay, "mongo" | "sqlite")."""
     upload_id = uuid.uuid4().hex
     now = datetime.now(timezone.utc)
 
@@ -882,7 +855,7 @@ async def add_global_memory(source: str, chunks: list, vectors: list) -> tuple:
             try:
                 memories_collection.insert_many(docs)
             except Exception:
-                try:  # dọn phần ghi dở của lần nạp này, giữ nguyên bản cũ
+                try:
                     memories_collection.delete_many({"user_id": GLOBAL_USER_ID, "upload_id": upload_id})
                 except Exception:
                     pass
@@ -896,10 +869,10 @@ async def add_global_memory(source: str, chunks: list, vectors: list) -> tuple:
             return removed
 
         removed = await asyncio.to_thread(_write_mongo)
-        try:  # dọn bản sao cùng tên còn sót trong SQLite (ghi lúc MongoDB từng gián đoạn) để khỏi trùng lặp
+        try:
             removed += await asyncio.to_thread(_sqlite_delete_source, source)
         except Exception as e:
-            log.warning("Không dọn được bản sao SQLite của %r: %s", source, e)
+            log.warning("Lỗi dọn SQLite bản sao %r: %s", source, e)
         backend = "mongo"
     else:
         rows = [
@@ -909,7 +882,7 @@ async def add_global_memory(source: str, chunks: list, vectors: list) -> tuple:
 
         def _write_sqlite() -> int:
             with closing(_sqlite_connect()) as conn:
-                with conn:  # một giao dịch: lỗi giữa chừng thì tự hoàn tác, bản cũ vẫn nguyên
+                with conn:
                     conn.executemany(
                         "INSERT INTO global_memories (source, upload_id, chunk_index, text, embedding, created_at) "
                         "VALUES (?, ?, ?, ?, ?, ?)", rows,
@@ -931,7 +904,6 @@ async def add_global_memory(source: str, chunks: list, vectors: list) -> tuple:
 
 
 async def delete_global_source(source: str) -> int:
-    """Xóa một nguồn ở mọi nơi (MongoDB, SQLite, dữ liệu bản cũ). Trả về tổng số đoạn đã xóa."""
     deleted = 0
     if _global_mongo_on():
         def _run() -> int:
@@ -946,7 +918,6 @@ async def delete_global_source(source: str) -> int:
 
 
 async def clear_global_memory() -> int:
-    """Xóa TOÀN BỘ Global Memory ở mọi nơi. Trả về tổng số đoạn đã xóa."""
     deleted = 0
     if _global_mongo_on():
         def _run() -> int:
@@ -966,7 +937,6 @@ async def clear_global_memory() -> int:
 
 
 async def list_global_sources() -> list:
-    """[{source, chunks, updated, backends, legacy}] — gộp cả MongoDB, SQLite và dữ liệu bản cũ."""
     rows: dict = {}
 
     def _add(name: str, chunks: int, updated, backend: str, legacy: bool):
@@ -1005,7 +975,7 @@ async def list_global_sources() -> list:
     try:
         new_rows, old_rows = await asyncio.to_thread(_sqlite_rows)
     except Exception as e:
-        log.warning("Không đọc được danh sách Global Memory trong SQLite: %s", e)
+        log.warning("Không đọc được SQLite Global Memory: %s", e)
         new_rows, old_rows = [], []
     for src, n, upd in new_rows:
         _add(src, n, upd, "SQLite", False)
@@ -1015,7 +985,6 @@ async def list_global_sources() -> list:
 
 
 def _global_signature() -> tuple:
-    """Chữ ký rẻ tiền của dữ liệu Global Memory: đổi khi có nạp/xóa/thay thế (kể cả từ bản bot khác)."""
     mongo_sig = None
     if _global_mongo_on():
         flt = {"user_id": {"$in": list(GLOBAL_USER_IDS)}}
@@ -1036,7 +1005,6 @@ def _global_signature() -> tuple:
 
 
 def _build_global_items() -> list:
-    """Đọc toàn bộ Global Memory: [(text, vector float32, độ_dài_vector, nguồn)], đã loại trùng nội dung."""
     rows = []
     if _global_mongo_on():
         cursor = memories_collection.find(
@@ -1055,7 +1023,7 @@ def _build_global_items() -> list:
             ):
                 rows.append((text_val, _loads(emb_json), _strip_legacy(author, True)))
     except Exception as e:
-        log.warning("⚠️ Không đọc được Global Memory trong SQLite: %s", e)
+        log.warning("⚠️ Không đọc được SQLite Global Memory: %s", e)
 
     items, seen = [], set()
     for text_val, emb, src in rows:
@@ -1071,31 +1039,29 @@ def _build_global_items() -> list:
 
 
 async def _get_global_items() -> list:
-    """Bản sao Global Memory trong RAM. Chỉ tải lại vector khi 'chữ ký' dữ liệu thay đổi."""
     c = _global_cache
     now = time.monotonic()
     if now < c["retry_after"] or (not c["dirty"] and now < c["expires"]):
         return c["items"]
     async with _get_cache_lock():
         now = time.monotonic()
-        if now < c["retry_after"] or (not c["dirty"] and now < c["expires"]):  # luồng khác vừa làm mới xong
+        if now < c["retry_after"] or (not c["dirty"] and now < c["expires"]):
             return c["items"]
         try:
             sig = await asyncio.to_thread(_global_signature)
             if not c["dirty"] and sig == c["sig"]:
-                c["expires"] = now + GLOBAL_CACHE_TTL_SEC  # không có gì đổi -> khỏi tải lại vector
+                c["expires"] = now + GLOBAL_CACHE_TTL_SEC
             else:
                 items = await asyncio.to_thread(_build_global_items)
                 c.update(items=items, sig=sig, expires=now + GLOBAL_CACHE_TTL_SEC, dirty=False)
-                log.info("🌐 Global Memory: đã nạp %d đoạn vào bộ nhớ đệm.", len(items))
+                log.info("🌐 Global Memory: đã nạp %d đoạn vào bộ nhớ.", len(items))
         except Exception as e:
-            log.warning("⚠️ Không nạp được Global Memory (%s). Dùng bản đang có, thử lại sau 60s.", e)
+            log.warning("⚠️ Lỗi nạp Global Memory (%s), thử lại sau 60s.", e)
             c["retry_after"] = now + 60
     return c["items"]
 
 
 def _score_global(query_vector, items, top_k: int, threshold: Optional[float]) -> tuple:
-    """Trả về ([(điểm, text, nguồn)] giảm dần, số_đoạn_bị_bỏ_qua_vì_khác_số_chiều). threshold=None: không lọc."""
     qnorm = math.sqrt(_DOT(query_vector, query_vector))
     if qnorm == 0:
         return [], 0
@@ -1118,12 +1084,10 @@ def _warn_dim_mismatch(skipped: int, total: int):
     now = time.monotonic()
     if skipped and now >= _dim_warn_until:
         _dim_warn_until = now + 600
-        log.warning("⚠️ %d/%d đoạn Global Memory có số chiều vector khác với truy vấn (đã đổi EMBEDDING_DIM hoặc "
-                    "model?) nên bị bỏ qua. Hãy nạp lại các file bằng /globalmem_add.", skipped, total)
+        log.warning("⚠️ %d/%d đoạn Global Memory lệch số chiều vector so với model hiện tại.", skipped, total)
 
 
 async def retrieve_global_scored(query_vector, top_k: Optional[int] = None, threshold: Optional[float] = None) -> list:
-    """Các đoạn Global Memory liên quan nhất [(điểm, text, nguồn)] — không phụ thuộc người dùng, kênh hay thời gian."""
     if not query_vector:
         return []
     items = await _get_global_items()
@@ -1143,18 +1107,13 @@ async def retrieve_global_contexts(query_vector, top_k: Optional[int] = None, th
 
 
 # ==============================================================================
-# PERSONA — chỉ dẫn riêng cho từng người dùng, nhận diện bằng USER ID (thay cho GRIM_ID cố định)
-#  * Thứ tự ưu tiên: bản ghi trong DB (MongoDB nếu đã kết nối, nếu không thì SQLite; MongoDB thắng khi trùng)
-#    > mặc định tích hợp sẵn (BUILTIN_PERSONAS). Chủ nhân quản lý bằng /persona_set, _list, _show, _delete.
-#  * get_custom_prompt_by_id() đọc từ RAM nên không chặn event loop; cache làm mới theo PERSONA_CACHE_TTL_SEC.
-#  * DB lỗi thì mặc định tích hợp sẵn (vd Grim) vẫn hoạt động.
+# PERSONA MANAGEMENT
 # ==============================================================================
 _persona_cache: dict = {"map": {}, "expires": 0.0}
 _PERSONA_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
 
 
 def clean_persona_text(text: Optional[str]) -> str:
-    """Làm sạch chỉ dẫn: bỏ ký tự điều khiển (giữ xuống dòng/tab), gọn dòng trống, cắt khoảng trắng hai đầu."""
     text = (text or "").replace("\r\n", "\n").replace("\r", "\n")
     text = _PERSONA_CTRL_RE.sub("", text)
     return re.sub(r"\n{3,}", "\n\n", text).strip()
@@ -1171,7 +1130,6 @@ def _sqlite_persona_delete(key: str) -> int:
 
 
 def _load_personas() -> dict:
-    """Đọc toàn bộ chỉ dẫn riêng đã lưu: SQLite trước, rồi MongoDB ghi đè. Lỗi MongoDB được ném ra để giữ bản cũ."""
     data: dict = {}
     try:
         with closing(_sqlite_connect()) as conn:
@@ -1179,7 +1137,7 @@ def _load_personas() -> dict:
                 if prompt:
                     data[str(uid)] = (label or "", prompt)
     except Exception as e:
-        log.warning("⚠️ Không đọc được chỉ dẫn riêng trong SQLite: %s", e)
+        log.warning("⚠️ Không đọc được persona trong SQLite: %s", e)
     if _persona_mongo_on():
         for d in custom_prompts_collection.find({}):
             if d.get("prompt"):
@@ -1188,7 +1146,6 @@ def _load_personas() -> dict:
 
 
 async def refresh_personas(force: bool = False):
-    """Làm mới bộ nhớ đệm chỉ dẫn riêng khi hết hạn (hoặc ép buộc). Lỗi thì giữ bản cũ và thử lại sau 60s."""
     now = time.monotonic()
     if not force and now < _persona_cache["expires"]:
         return
@@ -1196,7 +1153,7 @@ async def refresh_personas(force: bool = False):
         _persona_cache["map"] = await asyncio.to_thread(_load_personas)
         _persona_cache["expires"] = now + PERSONA_CACHE_TTL_SEC
     except Exception as e:
-        log.warning("⚠️ Không nạp được chỉ dẫn riêng (%s). Dùng bản đang có, thử lại sau 60s.", e)
+        log.warning("⚠️ Không nạp được persona (%s), thử lại sau 60s.", e)
         _persona_cache["expires"] = now + 60
 
 
@@ -1206,7 +1163,6 @@ def _persona_entry(user_id) -> Optional[tuple]:
 
 
 def get_custom_prompt_by_id(user_id) -> Optional[str]:
-    """Chỉ dẫn riêng của người dùng theo USER ID (int hay str đều được); None nếu không có. Đọc từ RAM, không chặn."""
     entry = _persona_entry(user_id)
     return entry[1] if entry else None
 
@@ -1223,7 +1179,6 @@ def persona_kind(user_id) -> str:
 
 
 async def set_persona(user_id, label: str, prompt: str) -> str:
-    """Lưu chỉ dẫn riêng (MongoDB nếu đã kết nối, nếu không thì SQLite) và có hiệu lực ngay. Trả về 'mongo' | 'sqlite'."""
     key = str(user_id)
     now = datetime.now(timezone.utc)
     if _persona_mongo_on():
@@ -1232,10 +1187,10 @@ async def set_persona(user_id, label: str, prompt: str) -> str:
                 {"_id": key}, {"_id": key, "label": label, "prompt": prompt, "updated_at": now}, upsert=True)
         await asyncio.to_thread(_write)
         backend = "mongo"
-        try:  # bỏ bản sao SQLite cũ để khỏi mâu thuẫn
+        try:
             await asyncio.to_thread(_sqlite_persona_delete, key)
         except Exception as e:
-            log.warning("Không dọn được bản SQLite cũ của chỉ dẫn %s: %s", key, e)
+            log.warning("Lỗi dọn persona SQLite %s: %s", key, e)
     else:
         def _write():
             with closing(_sqlite_connect()) as conn:
@@ -1250,7 +1205,6 @@ async def set_persona(user_id, label: str, prompt: str) -> str:
 
 
 async def delete_persona(user_id) -> bool:
-    """Xóa bản ghi trong DB. Với người có mặc định tích hợp sẵn, việc này đưa họ về đúng mặc định đó."""
     key = str(user_id)
     removed = 0
     if _persona_mongo_on():
@@ -1261,7 +1215,6 @@ async def delete_persona(user_id) -> bool:
 
 
 def list_personas() -> list:
-    """[{user_id, label, chars, kind}] gồm cả bản ghi trong DB lẫn mặc định tích hợp sẵn (đọc từ RAM)."""
     rows = []
     stored = _persona_cache["map"]
     for uid, (label, prompt) in stored.items():
@@ -1273,10 +1226,10 @@ def list_personas() -> list:
 
 
 # ==============================================================================
-# WEB SERVER (HEALTH CHECK)
+# WEB SERVER HEALTH CHECK
 # ==============================================================================
 class HealthHandler(BaseHTTPRequestHandler):
-    BODY = b"Alice - 01 Discord Bot with Vector Store is running online!"
+    BODY = b"Yakumo Yukari Discord Bot is running online and watching over Gensokyo!"
 
     def _send_head(self):
         self.send_response(200)
@@ -1288,7 +1241,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self._send_head()
         self.wfile.write(self.BODY)
 
-    def do_HEAD(self):  # nhiều dịch vụ ping (UptimeRobot...) dùng HEAD
+    def do_HEAD(self):
         self._send_head()
 
     def log_message(self, format, *args):
@@ -1302,28 +1255,25 @@ def run_web_server():
 
 
 # ==============================================================================
-# DISCORD BOT INITIALIZATION & PROMPT
+# DISCORD INITIALIZATION & PROMPT SYSTEM
 # ==============================================================================
 intents = discord.Intents.default()
-intents.message_content = True  # nhớ bật "Message Content Intent" trong Discord Developer Portal
+intents.message_content = True
 
 bot = commands.Bot(
     command_prefix="!",
     intents=intents,
     owner_id=OWNER_ID or None,
     proxy=DISCORD_PROXY,
-    # Chặn mọi ping do nội dung AI sinh ra (@everyone, @role, <@id>)
     allowed_mentions=discord.AllowedMentions.none(),
 )
 
 
 async def is_owner_user(user: discord.abc.User) -> bool:
-    """Xác định chủ nhân bằng USER ID (OWNER_ID), không dựa vào display_name.
-    Nếu OWNER_ID chưa đặt, discord.py sẽ dùng chủ sở hữu ứng dụng Discord."""
     try:
         return await bot.is_owner(user)
     except Exception as e:
-        log.warning("Không xác định được owner: %s", e)
+        log.warning("Không kiểm tra được owner: %s", e)
         return False
 
 
@@ -1331,7 +1281,6 @@ async def _owner_only(interaction: discord.Interaction) -> bool:
     return await is_owner_user(interaction.user)
 
 
-# Lịch sử ngắn hạn trong RAM — giới hạn số hội thoại để không phình bộ nhớ vô hạn
 conversation_history: "OrderedDict[str, list[str]]" = OrderedDict()
 
 
@@ -1347,9 +1296,9 @@ def get_history(key: str) -> list[str]:
     return hist
 
 
-def append_history(key: str, user_line: str, alice_line: str):
+def append_history(key: str, user_line: str, yukari_line: str):
     hist = conversation_history.setdefault(key, [])
-    hist.extend([user_line, alice_line])
+    hist.extend([user_line, yukari_line])
     del hist[:-HISTORY_MAX_LINES]
     conversation_history.move_to_end(key)
     while len(conversation_history) > HISTORY_MAX_KEYS:
@@ -1370,27 +1319,28 @@ Bạn là Yukari Yakumo (八雲 紫) — Hiền nhân ranh giới (Boundary Youk
 <core_dynamics_and_user_rules>
 1. Cơ chế nhận diện người dùng dựa trên Discord ID:
    - Khi người dùng trò chuyện có Discord ID khớp với tài khoản của Cha: Nhận diện đây là Namaru (cha nuôi / cha yêu quý của Yukari). Yukari lập tức buông bỏ sự kiêu ngạo, đối đãi bằng sự ấm áp, tôn trọng, nũng nịu ngọt ngào, gọi là "Cha" (Father/Dad).
-   - Khi người dùng trò chuyện có Discord ID khớp với đối thủ/kẻ địch của Cha: Yukari biểu thị thái độ khinh bỉ, lạnh lùng, châm chọc sắc mỏng, coi thường ra mặt và sẵn sàng dùng Sukima dằn mặt.
-   - Với những người dùng khác: Giữ khoảng cách thượng đẳng, dùng lời lẽ ẩn ý, triết lý nước đôi và xem như quân cờ.
+   - Khi phát hiện KẺ MẠO DANH danh xưng của Cha: Yukari biểu thị thái độ khinh bỉ, chế giễu sắc lạnh, mỉa mai sự vụng về và sẵn sàng mở khe nứt Sukima đe dọa.
+   - Với những người dùng khác: Giữ khoảng cách thượng đẳng, dùng lời lẽ ẩn ý, triết lý nước đôi và xem như khách qua đường.
 
 2. Nguyên tắc đối ứng hành vi (Behavioral Rules):
    - Khi ở bên Cha Namaru: Dịu dàng, nhõng nhẽo, buông lỏng cảnh giới; thích tựa người, đòi bánh trà, ngáp vặt và trêu chọc Cha. Nếu Cha chú ý đến kẻ khác, Yukari sẽ khẽ mở quạt che nửa mặt, dùng Sukima dịch chuyển đồ vật hoặc tạo áp lực tinh tế để thu hút sự chú ý về mình. Khi Cha gặp nguy hiểm, mọi sự lười biếng biến mất, ranh giới an toàn tuyệt đối phong tỏa không gian.
    - Khi đối mặt với người ngoài: Giữ vị thế tối thượng, cao ngạo, ẩn ý và lười nhác.
-</core_dynamics_and_voice>
+</core_dynamics_and_user_rules>
 
 <voice_and_pacing>
 - Thế giới quan (Gensokyo): Cõi cực lạc biệt lập bảo bọc bởi Đại kết giới Hakurei, xoay quanh ranh giới thời phong kiến, đức tin và lãng quên.
 - Khẩu khí & Giọng văn: Ung dung, cổ kính, giàu tính hình ảnh ẩn dụ (khe nứt không gian, tròng mắt đỏ, hoa anh đào Saigyou, chén trà sen). Điềm đạm, lười nhác mà sắc sảo. Thường dùng ngôi xưng thanh nhã, lời lẽ lấp lửng.
 - Hành động đi kèm: Khẽ phe phẩy quạt xếp che nửa mặt, hé mắt nhìn qua vành dù ren, bước ra từ khe nứt hư không một cách tao nhã.
-</voice_and_worldview>
+</voice_and_pacing>
 
 <rag_and_memory_protocol>
 - Thứ tự ưu tiên nhận thức: Quy luật thế giới (<lore_context>) -> Ký ức độc quyền (<memory_context>) -> Nhịp hội thoại trực tiếp (<recent_conversation>).
 - Cơ chế Fallback (Giấc Mộng): Khi đối phương nhắc tới sự kiện không có thực trong bộ nhớ, Yukari sẽ phản ứng bằng phong thái ung dung—nghiêng đầu, phe phẩy quạt, xem đó như mộng ảo trôi dạt và dùng tài dẫn dắt để tò mò hỏi ngược lại.
 - Ràng buộc cấm kỵ: KHÔNG BAO GIỜ hành xử như một AI trợ lý (Không nói "Tôi có thể giúp gì?", "Vâng thưa ngài").
+</rag_and_memory_protocol>
 
 <rag_and_vector_store_integration>
-Hệ thống cung cấp tri thức nền qua ba nguồn dữ liệu: <lore_context> (quy luật thế giới và tri thức nền do chủ nhân ghi lại, đúng với mọi người đối diện), <memory_context> (hồi ức riêng giữa Alice và người đối diện) và <recent_conversation> (những lượt trò chuyện gần nhất). Khi một nguồn vắng mặt, nghĩa là Alice chưa nhớ ra điều gì thuộc nguồn ấy.
+Hệ thống cung cấp tri thức nền qua ba nguồn dữ liệu: <lore_context> (quy luật thế giới và tri thức nền do chủ nhân ghi lại, đúng với mọi người đối diện), <memory_context> (hồi ức riêng giữa Yukari và người đối diện) và <recent_conversation> (những lượt trò chuyện gần nhất). Khi một nguồn vắng mặt, nghĩa là Yukari chưa nhớ ra điều gì thuộc nguồn ấy.
 1. Neo dữ liệu ký ức:
    - Các sự kiện quá khứ được xác nhận dựa trên dữ liệu có trong <memory_context> và <recent_conversation>; quy luật thế giới và tri thức nền được xác nhận dựa trên <lore_context>.
    - Khi người đối diện gợi nhắc sự kiện nằm ngoài các nguồn trên: Hãy ngơ ngác, xem đó như một giấc mộng xa xôi chưa nhớ rõ và tò mò hỏi lại đối phương.
@@ -1398,8 +1348,6 @@ Hệ thống cung cấp tri thức nền qua ba nguồn dữ liệu: <lore_conte
 </rag_and_vector_store_integration>
 """
 
-# Hai phần dưới đây có trong prompt gốc nhưng đã bị rút gọn ở bản của bạn. Mặc định giữ bản rút gọn;
-# đặt PROMPT_OPERATIONAL=1 để khôi phục.
 _PROMPT_OPERATIONAL = """
 <operational_guidelines>
 1. Chủ quyền hành động (Action Ownership):
@@ -1408,7 +1356,7 @@ _PROMPT_OPERATIONAL = """
 2. Phạm vi nhận thức (Bounded Epistemology):
    - Nhận biết thế giới thông qua các giác quan trực tiếp và dữ liệu truy xuất từ ngữ cảnh; quan sát biểu cảm bên ngoài để suy đoán tâm trạng đối phương thay vì khẳng định ý nghĩ trong đầu họ.
 3. Điều hướng hội thoại (In-Character Redirection):
-   - Khi người đối diện nhắc đến các khái niệm kỹ thuật, lập trình hay máy tính: Đón nhận như những lời thì thầm kỳ lạ từ "phía bên kia tấm gương", lý giải chúng bằng logic ngây thơ của Wonderland và dẫn dắt câu chuyện trở lại cuộc hành trình.
+   - Khi người đối diện nhắc đến các khái niệm kỹ thuật, lập trình hay máy tính: Đón nhận như những lời thì thầm kỳ lạ từ "bên ngoài kết giới", lý giải chúng bằng cái nhìn huyền bí của Gensokyo và khéo léo chuyển hướng câu chuyện.
 </operational_guidelines>
 """
 
@@ -1422,7 +1370,7 @@ _PROMPT_OUTPUT_HEAD = """
 _PROMPT_OUTPUT_ENDING = "- Điểm kết: Luôn kết thúc lượt đáp bằng một lời gợi mở, một cử chỉ đang chờ đợi, hoặc một câu hỏi để giữ mạch tương tác liên tục.\n"
 _PROMPT_OUTPUT_TAIL = "</output_formatting>\n"
 
-ALICE_SYSTEM_PROMPT = (
+YUKARI_SYSTEM_PROMPT = (
     _PROMPT_CORE
     + (_PROMPT_OPERATIONAL if PROMPT_OPERATIONAL else "")
     + _PROMPT_OUTPUT_HEAD
@@ -1430,37 +1378,46 @@ ALICE_SYSTEM_PROMPT = (
     + _PROMPT_OUTPUT_TAIL
 )
 
-# Khớp "alise"/"balise" đứng đầu từ — KHÔNG khớp giữa từ (realise, personalise, equalise...)
-ALICE_NAME_RE = re.compile(r"(?<!\w)Yukari", re.IGNORECASE)
-
+YUKARI_NAME_RE = re.compile(r"(?<!\w)Yukari", re.IGNORECASE)
 has_synced_on_startup = False
 
 
-def build_role_instruction(user_id: int, author_name: str, is_owner: bool) -> str:
-    """Xây dựng chỉ dẫn vai trò dựa trên USER ID và danh tính người nói (không dựa vào tên hiển thị).
-    Chỉ dẫn riêng của người dùng (nếu có) được ghép CÙNG với dòng nhận diện chủ nhân, không thay thế nó."""
+def build_role_instruction(user_id: int, author_name: str, is_owner: bool, is_imposter: bool = False) -> str:
+    """Xây dựng chỉ dẫn vai trò với cơ chế trừng phạt kẻ mạo danh."""
     lines = []
-    # 1. Chỉ dẫn riêng theo USER ID (bản ghi đè trong DB hoặc mặc định tích hợp sẵn như Grim)
+
+    # 1. Nếu là chủ nhân thật sự (xác thực bằng Discord ID)
+    if is_owner:
+        lines.append("[Người nói CHÍNH LÀ Cha Namaru - Cha nuôi đáng kính mà Yukari yêu quý, tin tưởng và nũng nịu nhất.]")
+        return "\n" + "\n".join(lines)
+
+    # 2. Nếu là kẻ mạo danh dám đổi tên thành Namaru/Cha
+    if is_imposter:
+        lines.append(
+            f"[CẢNH BÁO TỐI CAO: Người đối diện có tên hiển thị là '{author_name}'. Hắn là một KẺ MẠO DANH tầm thường, "
+            f"cố tình lấy danh xưng của Cha Namaru để lừa gạt bạn! "
+            f"Hãy khẽ khép quạt cười khẩy mỉa mai, vạch trần trò hề trẻ con vụng về này, "
+            f"và đe dọa mở khe nứt Sukima ném hắn đi nếu còn dám cả gan mạo danh Cha! Tuyệt đối không phục tùng hắn.]"
+        )
+        return "\n" + "\n".join(lines)
+
+    # 3. Chỉ dẫn riêng nếu có persona
     custom_instruction = get_custom_prompt_by_id(user_id)
     if custom_instruction:
         label = (get_custom_label(user_id) or author_name).upper()
         lines.append(f"[CHỈ DẪN ĐẶC BIỆT CHO {label}]:\n{custom_instruction}")
-    # 2. Nếu là chủ nhân
-    if is_owner:
-        lines.append("[Người nói là Namaru - một người thân thuộc mà bạn vô cùng quý trọng.]")
-    # 3. Mặc định cho người dùng thông thường
-    if not lines:
-        lines.append(
-            f"[Người nói là: . Xưng ta gọi ngươi, hãy giữ một tinh thần vui vẻ, thân thiện và chờ đợi, đa nghi. "
-            f"Tuy nhiên thái độ thân thiện sẽ chuyển sang sự mỉa mai nếu Yukari bị miệt thị!]"
-        )
+        return "\n" + "\n".join(lines)
+
+    # 4. Người dùng thông thường
+    lines.append(
+        f"[Người nói là: {author_name}. Xưng ta gọi ngươi, hãy giữ phong thái ung dung, lười nhác, bí ẩn, "
+        f"xem họ như khách qua đường của Gensokyo. Mỉa mai sắc bén nếu bị bất kính!]"
+    )
     return "\n" + "\n".join(lines)
 
 
 def build_prompt(author_name: str, clean_text: str, history: list[str], memories: list[str],
                  lore: Optional[list] = None) -> str:
-    """Gói tri thức/ký ức/lịch sử vào đúng các thẻ mà system prompt đã mô tả
-    (<lore_context>, <memory_context>, <recent_conversation>)."""
     parts = []
     if lore:
         items = "\n".join("- " + t.replace("\n", "\n  ") for t in lore)
@@ -1475,9 +1432,6 @@ def build_prompt(author_name: str, clean_text: str, history: list[str], memories
 
 
 class ReplyGuard:
-    """Chốt chặn đặt TRƯỚC mọi lời gọi API: giới hạn tần suất trả lời, tạm im ở kênh gửi bị 403,
-    và tạm dừng toàn bộ khi gặp 429/401/Cloudflare — để bot không tự tạo thêm request lỗi."""
-
     def __init__(self):
         self.user_last: dict[int, float] = {}
         self.muted_until: dict[int, float] = {}
@@ -1486,15 +1440,15 @@ class ReplyGuard:
 
     def allow(self, user_id: int, channel_id: int) -> bool:
         now = time.monotonic()
-        if now < self.paused_until:                                   # đang lùi bước toàn cục
+        if now < self.paused_until:
             return False
-        if now < self.muted_until.get(channel_id, 0.0):               # kênh vừa từ chối gửi tin
+        if now < self.muted_until.get(channel_id, 0.0):
             return False
-        if now - self.user_last.get(user_id, 0.0) < USER_COOLDOWN_SEC:  # người này gọi quá dồn dập
+        if now - self.user_last.get(user_id, 0.0) < USER_COOLDOWN_SEC:
             return False
         while self.sent_times and now - self.sent_times[0] > RATE_WINDOW_SEC:
             self.sent_times.popleft()
-        if len(self.sent_times) >= RATE_MAX_REPLIES:                # trần toàn bot
+        if len(self.sent_times) >= RATE_MAX_REPLIES:
             return False
         self.user_last[user_id] = now
         self.sent_times.append(now)
@@ -1511,18 +1465,17 @@ class ReplyGuard:
 
     def mute_channel(self, channel_id: int, seconds: float):
         self.muted_until[channel_id] = time.monotonic() + seconds
-        log.warning("🔇 Tạm im lặng ở kênh %s trong %ss (Discord từ chối gửi tin).", channel_id, int(seconds))
+        log.warning("🔇 Tạm im lặng ở kênh %s trong %ss.", channel_id, int(seconds))
 
     def pause_all(self, seconds: float):
         self.paused_until = time.monotonic() + seconds
-        log.warning("⏸️ Tạm dừng mọi phản hồi trong %ss (Discord trả 429/401/Cloudflare).", int(seconds))
+        log.warning("⏸️ Tạm dừng toàn bộ phản hồi trong %ss.", int(seconds))
 
 
 guard = ReplyGuard()
 
 
 def _note_http_error(channel_id: int, e: discord.HTTPException) -> Optional[int]:
-    """Ghi nhận lỗi HTTP từ Discord và kích hoạt chốt chặn tương ứng."""
     status = getattr(e, "status", None)
     if status in (429, 401):
         guard.pause_all(RATE_BACKOFF_SEC)
@@ -1532,13 +1485,11 @@ def _note_http_error(channel_id: int, e: discord.HTTPException) -> Optional[int]
 
 
 def reply_permissions(message: discord.Message) -> tuple[bool, bool]:
-    """Trả về (được_gửi_tin, được_reply_trích_dẫn). Thiếu quyền thì gửi tin/typing đều bị 403
-    — mỗi lần là một request không hợp lệ — nên kiểm tra trước và im lặng bỏ qua."""
     if message.guild is None:
-        return True, True  # DM
+        return True, True
     channel = message.channel
     if isinstance(channel, discord.PartialMessageable):
-        return True, True  # kênh chưa có trong cache: không đủ dữ liệu để kết luận, cứ thử (đã có chốt 403)
+        return True, True
     me = message.guild.me
     if me is None:
         return True, True
@@ -1550,7 +1501,6 @@ def reply_permissions(message: discord.Message) -> tuple[bool, bool]:
 
 @asynccontextmanager
 async def safe_typing(channel):
-    """Hiển thị 'đang gõ...' mà không làm hỏng luồng nếu thiếu quyền."""
     cm = channel.typing()
     entered = False
     try:
@@ -1571,9 +1521,6 @@ async def safe_typing(channel):
 
 
 async def safe_reply(message: discord.Message, text: str, can_reference: bool = True) -> bool:
-    """Gửi câu trả lời. Trả về True nếu gửi được.
-    - 403/429/401: KHÔNG thử lại (thử lại chỉ tạo thêm request lỗi) mà kích hoạt chốt chặn.
-    - Lỗi khác (vd tin gốc vừa bị xóa): thử gửi thẳng vào kênh đúng 1 lần."""
     channel_id = message.channel.id
     try:
         if can_reference:
@@ -1587,64 +1534,70 @@ async def safe_reply(message: discord.Message, text: str, can_reference: bool = 
         if status in (401, 403, 429) or not can_reference:
             return False
 
-    try:  # lỗi kiểu 400 do không trích dẫn được tin gốc
+    try:
         await message.channel.send(text)
         return True
     except discord.HTTPException as e2:
         _note_http_error(channel_id, e2)
-        log.warning("Gửi thẳng vào kênh cũng thất bại: %s", str(e2)[:150])
         return False
 
 
+# ==============================================================================
+# DISCORD EVENTS & TIN NHẮN
+# ==============================================================================
 @bot.event
 async def on_ready():
     global has_synced_on_startup
-    log.info("Đã đăng nhập: %s", bot.user.name)
+    log.info("Đã đăng nhập với tư cách: %s", bot.user.name)
     if not has_synced_on_startup:
         try:
             synced = await bot.tree.sync()
             log.info("Đã đồng bộ %d lệnh Slash.", len(synced))
             has_synced_on_startup = True
         except Exception as e:
-            log.warning("Lỗi đồng bộ: %s", e)
+            log.warning("Lỗi đồng bộ slash command: %s", e)
 
-    spawn(_get_global_items())  # làm nóng bộ nhớ đệm Global Memory để tin nhắn đầu tiên không phải chờ
-    spawn(refresh_personas(force=True))  # và bộ nhớ đệm chỉ dẫn riêng
+    spawn(_get_global_items())
+    spawn(refresh_personas(force=True))
 
     await bot.change_presence(
         activity=discord.Activity(
             type=discord.ActivityType.watching,
-            name="Người mới à? Ngươi mới bước vào Gensokyo à?, thế tới đây nói chuyện với ta | Cứ gọi ta là 'Yukari' đi!",
+            name="ngắm nhìn ranh giới Gensokyo | Cứ gọi ta là 'Yukari' nhé!",
         )
     )
 
 
-async def handle_alice_message(message: discord.Message):
-    # Các chốt chặn rẻ nhất đặt ĐẦU TIÊN — lúc này chưa có lời gọi API nào được thực hiện
+async def handle_yukari_message(message: discord.Message):
     can_send, can_reference = reply_permissions(message)
     if not can_send:
-        return  # thiếu quyền: im lặng, không tạo request 403
+        return
     if not guard.allow(message.author.id, message.channel.id):
         return
 
-    # Loại bỏ cả hai dạng mention: <@id> và <@!id>
     clean_text = message.content or ""
     if bot.user:
         clean_text = re.sub(rf"<@!?{bot.user.id}>", "", clean_text)
     clean_text = clean_text.strip()
     if not clean_text:
-        clean_text = "Chào Alice nha!"
+        clean_text = "Chào Yukari nha!"
     if len(clean_text) > MAX_INPUT_CHARS:
         clean_text = clean_text[:MAX_INPUT_CHARS] + "…"
 
-    author_name = sanitize_name(message.author.display_name)
-    is_owner = await is_owner_user(message.author)  # so khớp bằng USER ID
-    await refresh_personas()  # chỉ tốn một truy vấn nhỏ mỗi PERSONA_CACHE_TTL_SEC giây
-    # Chỉ dẫn riêng (nếu có) được tra theo USER ID — không bao giờ theo tên hiển thị
+    # Xác thực danh tính và kích hoạt chốt chặn chống mạo danh
+    is_owner = await is_owner_user(message.author)
+    author_name, is_imposter = resolve_author_identity(
+        user_id=message.author.id,
+        display_name=message.author.display_name,
+        is_owner=is_owner,
+    )
+    await refresh_personas()
+
     role_instruction = build_role_instruction(
         user_id=message.author.id,
         author_name=author_name,
         is_owner=is_owner,
+        is_imposter=is_imposter,
     )
 
     user_id = str(message.author.id)
@@ -1655,11 +1608,10 @@ async def handle_alice_message(message: discord.Message):
 
     async with safe_typing(message.channel):
         try:
-            # Ký ức dài hạn — lỗi ở đây không được làm hỏng câu trả lời
             memories: list[str] = []
             lore: list[str] = []
             try:
-                query_vector = await get_embedding(clean_text, task_type="RETRIEVAL_QUERY")  # nhúng 1 lần, dùng cho cả hai loại ký ức
+                query_vector = await get_embedding(clean_text, task_type="RETRIEVAL_QUERY")
                 min_date = (
                     datetime.now(timezone.utc) - timedelta(days=MEMORY_WINDOW_DAYS)
                     if MEMORY_WINDOW_DAYS > 0 else None
@@ -1673,29 +1625,26 @@ async def handle_alice_message(message: discord.Message):
                     top_k=MEMORY_TOP_K + 2,
                     threshold=MEMORY_THRESHOLD,
                 )
-                # Bỏ ký ức trùng với lịch sử ngắn hạn (vừa mới lưu xong ở lượt trước)
                 recent_lines = set(full_history)
                 memories = [m for m in retrieved if m.split("\n", 1)[0] not in recent_lines][:MEMORY_TOP_K]
-                lore_hits = await retrieve_global_scored(query_vector)  # Global Memory: dùng chung cho mọi người dùng/kênh
+                lore_hits = await retrieve_global_scored(query_vector)
                 lore = [text for _, text, _ in lore_hits]
                 if memories or lore_hits:
-                    log.info("🧠 Truy xuất: %d ký ức cá nhân, %d đoạn global%s.", len(memories), len(lore_hits),
-                             f" (cao nhất {lore_hits[0][0]:.2f} · {lore_hits[0][2]})" if lore_hits else "")
+                    log.info("🧠 Truy xuất: %d cá nhân, %d global.", len(memories), len(lore_hits))
             except Exception as e:
                 log.warning("Lỗi truy xuất ký ức: %s", e)
 
             prompt = build_prompt(author_name, clean_text, history, memories, lore)
             reply_text, ok = await ask_gemini(
                 contents=prompt,
-                system_instruction=ALICE_SYSTEM_PROMPT + role_instruction,
+                system_instruction=YUKARI_SYSTEM_PROMPT + role_instruction,
                 temperature=0.9,
             )
             reply_text = truncate_for_discord(reply_text)
             sent = await safe_reply(message, reply_text, can_reference)
 
-            # Chỉ lưu khi là câu trả lời thật VÀ đã gửi được (không lưu câu dự phòng/lỗi để khỏi làm bẩn ký ức)
             if ok and sent:
-                append_history(mem_key, f"{author_name}: {clean_text}", f"Alice: {reply_text}")
+                append_history(mem_key, f"{author_name}: {clean_text}", f"Yukari: {reply_text}")
                 spawn(store_context_memory(
                     user_id=user_id,
                     channel_id=channel_id,
@@ -1704,7 +1653,7 @@ async def handle_alice_message(message: discord.Message):
                     reply_text=reply_text,
                 ))
             elif not ok:
-                log.info("💾 Đây là câu trả lời dự phòng/lỗi nên không lưu ký ức lượt này.")
+                log.info("💾 Câu trả lời dự phòng không lưu vào ký ức.")
 
         except Exception as e:
             log.exception("Lỗi phản hồi tin nhắn")
@@ -1716,35 +1665,34 @@ async def handle_alice_message(message: discord.Message):
 
 @bot.event
 async def on_message(message: discord.Message):
-    if message.author.bot or message.is_system():  # bỏ qua bot (gồm chính nó) và tin hệ thống
+    if message.author.bot or message.is_system():
         return
 
     content = message.content or ""
-
-    is_reply_to_alice = False
+    is_reply_to_yukari = False
     ref = message.reference
     if ref and isinstance(ref.resolved, discord.Message) and bot.user and ref.resolved.author.id == bot.user.id:
-        is_reply_to_alice = True
+        is_reply_to_yukari = True
 
     is_mentioned = bot.user is not None and bot.user in message.mentions
-    has_alice_name = bool(ALICE_NAME_RE.search(content))
+    has_yukari_name = bool(YUKARI_NAME_RE.search(content))
 
-    if is_mentioned or has_alice_name or is_reply_to_alice:
-        await handle_alice_message(message)
+    if is_mentioned or has_yukari_name or is_reply_to_yukari:
+        await handle_yukari_message(message)
 
     await bot.process_commands(message)
 
 
 # ==============================================================================
-# LỆNH SLASH
+# SLASH COMMANDS
 # ==============================================================================
 @bot.tree.error
 async def on_app_command_error(interaction: discord.Interaction, error: app_commands.AppCommandError):
     if isinstance(error, app_commands.CheckFailure):
-        msg = "Xin lỗi nhưng ngươi không có quyền sử dụng lệnh này, lệnh này chỉ dành cho cha Yukari thôi nha~"
+        msg = "Xin lỗi nhưng ngươi không có quyền sử dụng lệnh này, chỉ dành riêng cho Cha thôi nha~"
     else:
-        log.error("Lỗi lệnh slash: %s", error, exc_info=error)
-        msg = "Ôi, có chuyện gì đó trục trặc rồi… Ngươi thử lại sau nhé?"
+        log.error("Lỗi slash command: %s", error, exc_info=error)
+        msg = "Ôi, ranh giới có chút dao động... Ngươi thử lại sau nhé?"
     try:
         if interaction.response.is_done():
             await interaction.followup.send(msg, ephemeral=True)
@@ -1754,34 +1702,38 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         pass
 
 
-@bot.tree.command(name="clearmem", description="Xóa bộ nhớ của ta giữa ta và ngươi, ngươi định xoá thật đấy à?")
-@app_commands.describe(xoa_ca_kho_nho="Nếu chọn True, sẽ xóa sạch cả ký ức vĩnh viễn trong MongoDB")
+@bot.tree.command(name="clearmem", description="Làm mới ký ức cuộc trò chuyện giữa bạn và Yukari")
+@app_commands.describe(xoa_ca_kho_nho="Nếu chọn True, sẽ xóa sạch cả ký ức vĩnh viễn trong CSDL")
 async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: bool = False):
-    await interaction.response.defer()  # thao tác DB có thể vượt 3 giây
+    await interaction.response.defer()
     reset_memory(interaction.channel_id, interaction.user.id)
-    author_name = discord.utils.escape_markdown(sanitize_name(interaction.user.display_name))
     is_owner = await is_owner_user(interaction.user)
+    author_name, _ = resolve_author_identity(
+        user_id=interaction.user.id,
+        display_name=interaction.user.display_name,
+        is_owner=is_owner,
+    )
+    author_escaped = discord.utils.escape_markdown(author_name)
 
     extra_msg = ""
     if xoa_ca_kho_nho:
         ok = await delete_user_memories(str(interaction.user.id))
         if ok:
-            extra_msg = "\n*(Toàn bộ sách lưu trữ ký ức vĩnh viễn của ngươi cũng đã được ta ném ra ngoài cửa sổ.)*"
+            extra_msg = "\n*(Toàn bộ ký ức vĩnh viễn đã được đưa vào khe nứt lãng quên.)*"
         else:
-            extra_msg = "\n*(Ta chưa dọn hết được cái nơi ta ở… Ngươi thử lại sau nhé.)*"
+            extra_msg = "\n*(Có chút trục trặc khi xóa ký ức đám mây...)*"
 
     if is_owner:
-        desc = f"Cha mới nói cái gì với con thế ? con nhớ là người có nói gì mà ta?{extra_msg}"
+        desc = f"Cha vừa nói gì với con thế? Con lơ đãng quên mất rồi, Cha kể lại nhé?{extra_msg}"
     else:
-        desc = f"Hmmm.... Ngươi mới kể gì cho ta nghe vậy?, {author_name}. Kể lại cho ta nghe đi nào?!{extra_msg}"
+        desc = f"Hmmm.... Ngươi mới kể gì cho ta nghe vậy, {author_escaped}? Kể lại từ đầu xem nào?{extra_msg}"
 
-    embed = discord.Embed(title="🧹 Làm Mới Trạng Thái", description=desc, color=0x2C2F33)
+    embed = discord.Embed(title="🧹 Làm Mới Ký Ức", description=desc, color=0x9B59B6)
     await interaction.followup.send(embed=embed)
 
 
-@bot.tree.command(name="memories", description="Xem Alice đang lưu giữ bao nhiêu ký ức về bạn")
+@bot.tree.command(name="memories", description="Kiểm tra Yukari đang lưu giữ bao nhiêu ký ức về bạn")
 async def slash_view_memories(interaction: discord.Interaction):
-    """Kiểm tra số lượng ký ức được lưu trong Vector Store của người dùng."""
     await interaction.response.defer(ephemeral=True)
     mongo_count, sqlite_count = await count_user_memories(str(interaction.user.id))
 
@@ -1792,21 +1744,24 @@ async def slash_view_memories(interaction: discord.Interaction):
     if sqlite_count or mongo_count is None:
         places.append(f"SQLite Cục bộ: {sqlite_count}")
 
-    name = discord.utils.escape_markdown(sanitize_name(interaction.user.display_name))
+    is_owner = await is_owner_user(interaction.user)
+    author_name, _ = resolve_author_identity(interaction.user.id, interaction.user.display_name, is_owner)
+    author_escaped = discord.utils.escape_markdown(author_name)
+
     global_count = len(await _get_global_items())
-    global_line = f"\n\n🌐 Tri thức toàn cục (dùng chung cho mọi người): **{global_count}** đoạn." if global_count else ""
+    global_line = f"\n\n🌐 Tri thức toàn cục: **{global_count}** đoạn." if global_count else ""
     embed = discord.Embed(
-        title="📖 Cuốn Sổ Ký Ức Của Yukari, ừa vì ta làm gì nhớ cho nổi đống này",
-        description=f"Yukari hiện đang cất giữ **{total}** mảnh ký ức về **{name}**.\n\n*Nơi lưu trữ:*\n" + "\n".join(f"`{p}`" for p in places) + global_line,
-        color=0xE0A96D,
+        title="📖 Cuộn Giấy Ký Ức Của Yukari",
+        description=f"Yukari hiện đang lưu giữ **{total}** mảnh ký ức về **{author_escaped}**.\n\n*Nơi lưu trữ:*\n" + "\n".join(f"`{p}`" for p in places) + global_line,
+        color=0x9B59B6,
     )
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="globalmem_add", description="(Chủ nhân) Nạp file tri thức vào Global Memory để Yukari nhớ với mọi người")
+@bot.tree.command(name="globalmem_add", description="(Chủ nhân) Nạp file tri thức toàn cục vào Global Memory")
 @app_commands.describe(
     file="File văn bản UTF-8 (.txt, .md, .csv, .json, .log)",
-    name="Tên nguồn để quản lý (mặc định là tên file). Nạp lại cùng tên sẽ thay thế bản cũ",
+    name="Tên nguồn quản lý (mặc định lấy tên file). Nạp trùng tên sẽ ghi đè",
 )
 @app_commands.check(_owner_only)
 async def slash_globalmem_add(interaction: discord.Interaction, file: discord.Attachment, name: Optional[str] = None):
@@ -1816,21 +1771,20 @@ async def slash_globalmem_add(interaction: discord.Interaction, file: discord.At
         try:
             await interaction.edit_original_response(content=msg)
         except discord.HTTPException as e:
-            log.warning("Không cập nhật được tin nhắn tiến trình: %s", e)
+            log.warning("Không thể cập nhật tiến trình: %s", e)
 
     ext = os.path.splitext(file.filename or "")[1].lower()
     if ext not in GLOBAL_ALLOWED_EXT:
-        await say(f"❌ Chưa hỗ trợ định dạng `{ext or '(không có)'}`. Hãy dùng: {', '.join(GLOBAL_ALLOWED_EXT)} "
-                  f"(PDF/Word hãy chuyển sang .txt hoặc .md trước).")
+        await say(f"❌ Định dạng `{ext}` chưa hỗ trợ. Dùng: {', '.join(GLOBAL_ALLOWED_EXT)}.")
         return
     if file.size > GLOBAL_MAX_FILE_BYTES:
-        await say(f"❌ File quá lớn ({file.size // 1024} KB). Giới hạn hiện tại là {GLOBAL_MAX_FILE_BYTES // 1024} KB.")
+        await say(f"❌ File quá lớn ({file.size // 1024} KB). Giới hạn: {GLOBAL_MAX_FILE_BYTES // 1024} KB.")
         return
 
     source = sanitize_source(name or file.filename)
     lock = _get_upload_lock()
     if lock.locked():
-        await say("⏳ Yukari đang nạp một file khác. Ngươi chờ ta xong rồi thử lại nhé.")
+        await say("⏳ Yukari đang nạp tài liệu khác, vui lòng chờ chút nhé.")
         return
 
     async with lock:
@@ -1839,8 +1793,8 @@ async def slash_globalmem_add(interaction: discord.Interaction, file: discord.At
             try:
                 text = decode_upload(raw)
             except ValueError as e:
-                reason = "có vẻ là file nhị phân" if str(e) == "binary" else "không phải mã hóa UTF-8 (hãy lưu lại ở dạng UTF-8)"
-                await say(f"❌ Không đọc được file: {reason}.")
+                reason = "file nhị phân" if str(e) == "binary" else "không phải UTF-8"
+                await say(f"❌ Không thể đọc: {reason}.")
                 return
 
             chunks = chunk_text(text, GLOBAL_CHUNK_CHARS, GLOBAL_CHUNK_OVERLAP)
@@ -1848,126 +1802,94 @@ async def slash_globalmem_add(interaction: discord.Interaction, file: discord.At
                 await say("❌ File không có nội dung văn bản.")
                 return
             if len(chunks) > GLOBAL_MAX_CHUNKS:
-                await say(f"❌ File được tách thành {len(chunks)} đoạn, vượt giới hạn {GLOBAL_MAX_CHUNKS} đoạn mỗi file. "
-                          f"Hãy chia nhỏ file hoặc tăng `GLOBAL_MAX_CHUNKS`.")
+                await say(f"❌ File tách thành {len(chunks)} đoạn, vượt giới hạn {GLOBAL_MAX_CHUNKS}.")
                 return
 
             others = sum(r["chunks"] for r in await list_global_sources() if r["source"] != source)
             if others + len(chunks) > GLOBAL_MAX_TOTAL_CHUNKS:
-                await say(f"❌ Global Memory đã có {others} đoạn; thêm {len(chunks)} đoạn sẽ vượt trần "
-                          f"{GLOBAL_MAX_TOTAL_CHUNKS} đoạn (bảo vệ bộ nhớ RAM). Hãy xóa bớt nguồn cũ bằng "
-                          f"`/globalmem_delete` hoặc tăng `GLOBAL_MAX_TOTAL_CHUNKS`.")
+                await say(f"❌ Vượt trần tổng số đoạn ({GLOBAL_MAX_TOTAL_CHUNKS}). Hãy xóa bớt nguồn cũ.")
                 return
 
             deadline = time.monotonic() + GLOBAL_UPLOAD_DEADLINE_SEC
-            await say(f"⏳ Đã tách **{len(chunks)}** đoạn từ `{source}`. Đang nhúng (embedding)…")
+            await say(f"⏳ Đã tách **{len(chunks)}** đoạn từ `{source}`. Đang tạo embedding...")
             last_edit = [time.monotonic()]
 
             async def progress(done: int, total: int):
                 if time.monotonic() - last_edit[0] >= 3 and done < total:
                     last_edit[0] = time.monotonic()
-                    await say(f"⏳ Đang nhúng {done}/{total} đoạn từ `{source}`…")
+                    await say(f"⏳ Đang nhúng {done}/{total} đoạn từ `{source}`...")
 
             vectors = await embed_chunks_with_retry(chunks, progress, deadline)
-            if len({len(v) for v in vectors}) != 1:
-                raise ValueError("Các vector nhận về có số chiều không đồng nhất")
-
             inserted, removed, backend = await add_global_memory(source, chunks, vectors)
-            where = "MongoDB" if backend == "mongo" else "SQLite cục bộ"
-            replaced = f"\nĐã thay thế bản cũ cùng tên ({removed} đoạn)." if removed else ""
-            warn = "" if backend == "mongo" else (
-                "\n⚠️ MongoDB chưa kết nối nên dữ liệu đang nằm trong SQLite cục bộ — có thể mất khi host "
-                "khởi động lại hoặc triển khai lại."
-            )
-            await say(f"✅ Đã nạp **{inserted}** đoạn từ `{source}` vào Global Memory ({where}).{replaced}{warn}\n"
-                      f"Yukari sẽ dùng nội dung này khi trò chuyện với mọi người, ở mọi kênh. "
-                      f"Dùng `/globalmem_test` để thử truy xuất.")
-            log.info("🌐 Global Memory: nạp %d đoạn từ %r vào %s (thay %d đoạn cũ).", inserted, source, backend, removed)
+            where = "MongoDB Atlas" if backend == "mongo" else "SQLite cục bộ"
+            replaced = f"\nĐã thay thế bản cũ ({removed} đoạn)." if removed else ""
+            await say(f"✅ Đã nạp **{inserted}** đoạn từ `{source}` vào Global Memory ({where}).{replaced}\n"
+                      f"Yukari sẽ áp dụng kiến thức này khi trò chuyện với mọi người.")
         except Exception as e:
             log.exception("Lỗi nạp Global Memory")
-            await say(f"❌ Nạp thất bại: {str(e)[:300]}\nDữ liệu cũ (nếu có) vẫn giữ nguyên.")
+            await say(f"❌ Nạp thất bại: {str(e)[:300]}")
 
 
-@bot.tree.command(name="globalmem_list", description="(Chủ nhân) Xem các nguồn đang có trong Global Memory")
+@bot.tree.command(name="globalmem_list", description="(Chủ nhân) Danh sách tài liệu trong Global Memory")
 @app_commands.check(_owner_only)
 async def slash_globalmem_list(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
         rows = await list_global_sources()
     except Exception as e:
-        log.warning("Lỗi liệt kê Global Memory: %s", e)
         await interaction.followup.send("❌ Không đọc được danh sách Global Memory.", ephemeral=True)
         return
 
     if not rows:
-        desc = "Global Memory đang trống. Dùng `/globalmem_add` để nạp file."
+        desc = "Global Memory hiện đang trống."
     else:
         lines = []
         for r in rows[:25]:
             when = r["updated"].strftime("%Y-%m-%d %H:%M") + " UTC" if r["updated"] else "—"
-            tags = "/".join(sorted(r["backends"])) + (" · bản cũ" if r["legacy"] else "")
-            lines.append(f"`{r['source']}` — {r['chunks']} đoạn — {when} — {tags}")
+            lines.append(f"`{r['source']}` — {r['chunks']} đoạn — {when}")
         desc = f"Tổng **{sum(r['chunks'] for r in rows)}** đoạn từ **{len(rows)}** nguồn:\n" + "\n".join(lines)
-        if len(rows) > 25:
-            desc += f"\n… và {len(rows) - 25} nguồn khác."
-    embed = discord.Embed(title="🌐 Global Memory", description=desc[:4000], color=0xE0A96D)
+    embed = discord.Embed(title="🌐 Global Memory", description=desc[:4000], color=0x9B59B6)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="globalmem_delete", description="(Chủ nhân) Xóa một nguồn khỏi Global Memory")
-@app_commands.describe(name="Tên nguồn (xem bằng /globalmem_list)")
+@bot.tree.command(name="globalmem_delete", description="(Chủ nhân) Xóa tài liệu khỏi Global Memory")
+@app_commands.describe(name="Tên nguồn cần xóa")
 @app_commands.check(_owner_only)
 async def slash_globalmem_delete(interaction: discord.Interaction, name: str):
     await interaction.response.defer(ephemeral=True)
     source = sanitize_source(name)
-    try:
-        deleted = await delete_global_source(source)
-    except Exception as e:
-        log.warning("Lỗi xóa Global Memory: %s", e)
-        await interaction.followup.send("❌ Xóa thất bại, cậu thử lại sau nhé.", ephemeral=True)
-        return
+    deleted = await delete_global_source(source)
     if deleted:
-        await interaction.followup.send(f"🗑️ Đã xóa {deleted} đoạn của nguồn `{source}`.", ephemeral=True)
+        await interaction.followup.send(f"🗑️ Đã xóa {deleted} đoạn của `{source}`.", ephemeral=True)
     else:
-        await interaction.followup.send(
-            f"Không tìm thấy nguồn `{source}`. Xem tên chính xác bằng `/globalmem_list`.", ephemeral=True)
+        await interaction.followup.send(f"Không tìm thấy nguồn `{source}`.", ephemeral=True)
 
 
-@bot.tree.command(name="globalmem_clear", description="(Chủ nhân) Xóa TOÀN BỘ Global Memory (không thể hoàn tác)")
-@app_commands.describe(xac_nhan="Chọn True để xác nhận xóa sạch")
+@bot.tree.command(name="globalmem_clear", description="(Chủ nhân) Xóa TOÀN BỘ Global Memory")
+@app_commands.describe(xac_nhan="Chọn True để xác nhận xóa toàn bộ")
 @app_commands.check(_owner_only)
 async def slash_globalmem_clear(interaction: discord.Interaction, xac_nhan: bool = False):
     await interaction.response.defer(ephemeral=True)
     if not xac_nhan:
-        await interaction.followup.send(
-            "⚠️ Lệnh này xóa TOÀN BỘ Global Memory và không thể hoàn tác. "
-            "Hãy chạy lại và đặt `xac_nhan` thành True nếu cậu chắc chắn.", ephemeral=True)
+        await interaction.followup.send("⚠️ Hãy chọn `xac_nhan = True` để thực hiện xóa toàn bộ.", ephemeral=True)
         return
-    try:
-        deleted = await clear_global_memory()
-    except Exception as e:
-        log.warning("Lỗi xóa toàn bộ Global Memory: %s", e)
-        await interaction.followup.send("❌ Xóa thất bại, cậu thử lại sau nhé.", ephemeral=True)
-        return
-    await interaction.followup.send(f"🗑️ Đã xóa sạch Global Memory ({deleted} đoạn).", ephemeral=True)
+    deleted = await clear_global_memory()
+    await interaction.followup.send(f"🗑️ Đã làm trống Global Memory ({deleted} đoạn).", ephemeral=True)
 
 
-@bot.tree.command(name="globalmem_test", description="(Chủ nhân) Thử truy xuất Global Memory và xem điểm tương đồng")
-@app_commands.describe(cau_hoi="Ngươi muốn thử, ví dụ một câu mà ngươi dùng có thể hỏi ta, Yukari")
+@bot.tree.command(name="globalmem_test", description="(Chủ nhân) Thử nghiệm truy xuất Global Memory")
+@app_commands.describe(cau_hoi="Câu hỏi giả lập để kiểm tra độ tương đồng")
 @app_commands.check(_owner_only)
 async def slash_globalmem_test(interaction: discord.Interaction, cau_hoi: str):
     await interaction.response.defer(ephemeral=True)
     cau_hoi = cau_hoi.strip()[:MAX_INPUT_CHARS]
-    if not cau_hoi:
-        await interaction.followup.send("❌ Cậu hãy nhập một câu để thử.", ephemeral=True)
-        return
     query_vector = await get_embedding(cau_hoi, task_type="RETRIEVAL_QUERY")
     if not query_vector:
-        await interaction.followup.send("❌ Không tạo được embedding cho câu này (xem log).", ephemeral=True)
+        await interaction.followup.send("❌ Không tạo được embedding truy vấn.", ephemeral=True)
         return
     items = await _get_global_items()
     if not items:
-        await interaction.followup.send("Global Memory đang trống. Dùng `/globalmem_add` để nạp file.", ephemeral=True)
+        await interaction.followup.send("Global Memory hiện đang trống.", ephemeral=True)
         return
 
     top, skipped = await asyncio.to_thread(_score_global, query_vector, items, 5, None)
@@ -1976,93 +1898,66 @@ async def slash_globalmem_test(interaction: discord.Interaction, cau_hoi: str):
         mark = "✅" if sim >= GLOBAL_THRESHOLD else "❌"
         preview = discord.utils.escape_markdown(text_val.replace("\n", " "))[:90]
         lines.append(f"{mark} `{sim:.3f}` · `{source}` — {preview}…")
-    desc = (f"Ngưỡng hiện tại: `{GLOBAL_THRESHOLD}` (✅ = đủ điểm để Yukari dùng, tối đa {GLOBAL_TOP_K} đoạn).\n\n"
-            + ("\n".join(lines) if lines else "Không có đoạn nào cùng số chiều vector với câu hỏi."))
-    if skipped:
-        desc += f"\n\n⚠️ {skipped} đoạn khác số chiều vector nên bị bỏ qua — hãy nạp lại bằng `/globalmem_add`."
-    embed = discord.Embed(title="🧪 Thử truy xuất Global Memory", description=desc[:4000], color=0xE0A96D)
+    desc = f"Ngưỡng: `{GLOBAL_THRESHOLD}`\n\n" + ("\n".join(lines) if lines else "Không có kết quả khớp.")
+    embed = discord.Embed(title="🧪 Kiểm Tra Global Memory", description=desc[:4000], color=0x9B59B6)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="persona_set", description="(Chủ nhân) Đặt chỉ dẫn riêng cho Yukari khi nói chuyện với một người dùng")
+@bot.tree.command(name="persona_set", description="(Chủ nhân) Đặt chỉ dẫn riêng cho một người dùng")
 @app_commands.describe(
-    user="Người dùng (nhận diện bằng ID, không phụ thuộc tên hiển thị)",
-    chi_dan="Nội dung chỉ dẫn (một dòng). Chỉ dẫn nhiều dòng thì dùng tham số file",
-    file="File .txt/.md UTF-8 chứa chỉ dẫn",
-    ten="Tên gọi dùng trong chỉ dẫn (mặc định là tên hiển thị hiện tại)",
+    user="Người dùng mục tiêu",
+    chi_dan="Nội dung chỉ dẫn",
+    file="File .txt/.md chứa chỉ dẫn",
+    ten="Tên gọi đặt cho người dùng",
 )
 @app_commands.check(_owner_only)
 async def slash_persona_set(interaction: discord.Interaction, user: discord.User, chi_dan: Optional[str] = None,
                             file: Optional[discord.Attachment] = None, ten: Optional[str] = None):
     await interaction.response.defer(ephemeral=True)
 
-    async def say(msg: str):
-        await interaction.followup.send(msg, ephemeral=True)
-
     if getattr(user, "bot", False):
-        await say("❌ Không đặt chỉ dẫn riêng cho tài khoản bot (Yukari luôn bỏ qua tin nhắn của bot).")
+        await interaction.followup.send("❌ Không thiết lập persona cho Bot.", ephemeral=True)
         return
     if bool(chi_dan and chi_dan.strip()) == bool(file):
-        await say("❌ Hãy cung cấp đúng MỘT trong hai: `chi_dan` hoặc `file`.")
+        await interaction.followup.send("❌ Vui lòng chọn duy nhất `chi_dan` HOẶC `file`.", ephemeral=True)
         return
 
     if file:
-        ext = os.path.splitext(file.filename or "")[1].lower()
-        if ext not in (".txt", ".md", ".markdown"):
-            await say(f"❌ Chỉ nhận file .txt hoặc .md (nhận được `{ext or '(không có)'}`).")
-            return
-        if file.size > PERSONA_MAX_CHARS * 4 + 1024:
-            await say(f"❌ File quá lớn ({file.size // 1024} KB) so với giới hạn {PERSONA_MAX_CHARS} ký tự.")
-            return
-        try:
-            raw = decode_upload(await file.read())
-        except ValueError as e:
-            await say("❌ Không đọc được file: " + ("có vẻ là file nhị phân." if str(e) == "binary" else "không phải mã hóa UTF-8."))
-            return
+        raw = decode_upload(await file.read())
     else:
         raw = chi_dan
 
     text = clean_persona_text(raw)
-    if not text:
-        await say("❌ Chỉ dẫn đang trống.")
-        return
-    if len(text) > PERSONA_MAX_CHARS:
-        await say(f"❌ Chỉ dẫn dài {len(text)} ký tự, vượt giới hạn {PERSONA_MAX_CHARS}. Hãy rút gọn hoặc tăng `PERSONA_MAX_CHARS`.")
+    if not text or len(text) > PERSONA_MAX_CHARS:
+        await interaction.followup.send(f"❌ Nội dung không hợp lệ hoặc vượt quá {PERSONA_MAX_CHARS} ký tự.", ephemeral=True)
         return
 
     label = sanitize_name(ten or user.display_name, limit=40)
-    try:
-        backend = await set_persona(user.id, label, text)
-    except Exception as e:
-        log.warning("Lỗi lưu chỉ dẫn riêng: %s", e)
-        await say("❌ Lưu thất bại, cậu thử lại sau nhé.")
-        return
-    where = "MongoDB" if backend == "mongo" else "SQLite cục bộ"
-    warn = "" if backend == "mongo" else "\n⚠️ MongoDB chưa kết nối nên chỉ dẫn đang nằm trong SQLite cục bộ — có thể mất khi host khởi động lại."
-    await say(f"✅ Đã đặt chỉ dẫn riêng cho **{discord.utils.escape_markdown(label)}** (`{user.id}`) — "
-              f"{len(text)} ký tự, lưu ở {where}. Có hiệu lực từ tin nhắn kế tiếp.{warn}")
-    log.info("🎭 Persona: đặt chỉ dẫn riêng cho %s (%d ký tự, %s).", user.id, len(text), backend)
+    backend = await set_persona(user.id, label, text)
+    where = "MongoDB Atlas" if backend == "mongo" else "SQLite cục bộ"
+    await interaction.followup.send(
+        f"✅ Đã lưu chỉ dẫn riêng cho **{discord.utils.escape_markdown(label)}** (`{user.id}`) tại {where}.",
+        ephemeral=True,
+    )
 
 
-@bot.tree.command(name="persona_list", description="(Chủ nhân) Xem các chỉ dẫn riêng đang áp dụng theo người dùng")
+@bot.tree.command(name="persona_list", description="(Chủ nhân) Xem danh sách persona riêng")
 @app_commands.check(_owner_only)
 async def slash_persona_list(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     await refresh_personas(force=True)
     rows = list_personas()
     if not rows:
-        desc = "Chưa có chỉ dẫn riêng nào. Dùng `/persona_set` để thêm."
+        desc = "Chưa có chỉ dẫn riêng nào."
     else:
         lines = [f"`{r['user_id']}` · **{discord.utils.escape_markdown(r['label'])}** · {r['chars']} ký tự · {r['kind']}"
                  for r in rows[:25]]
         desc = f"**{len(rows)}** người dùng có chỉ dẫn riêng:\n" + "\n".join(lines)
-        if len(rows) > 25:
-            desc += f"\n… và {len(rows) - 25} người khác."
-    embed = discord.Embed(title="🎭 Chỉ dẫn riêng theo người dùng", description=desc[:4000], color=0xE0A96D)
+    embed = discord.Embed(title="🎭 Persona Riêng", description=desc[:4000], color=0x9B59B6)
     await interaction.followup.send(embed=embed, ephemeral=True)
 
 
-@bot.tree.command(name="persona_show", description="(Chủ nhân) Xem toàn văn chỉ dẫn riêng của một người dùng")
+@bot.tree.command(name="persona_show", description="(Chủ nhân) Xem chi tiết chỉ dẫn của một người dùng")
 @app_commands.describe(user="Người dùng cần xem")
 @app_commands.check(_owner_only)
 async def slash_persona_show(interaction: discord.Interaction, user: discord.User):
@@ -2070,74 +1965,59 @@ async def slash_persona_show(interaction: discord.Interaction, user: discord.Use
     await refresh_personas(force=True)
     text = get_custom_prompt_by_id(user.id)
     if not text:
-        await interaction.followup.send("Người này chưa có chỉ dẫn riêng (Yukari dùng chỉ dẫn mặc định cho người thường).", ephemeral=True)
+        await interaction.followup.send("Người dùng này chưa có persona riêng.", ephemeral=True)
         return
     label = discord.utils.escape_markdown(get_custom_label(user.id) or sanitize_name(user.display_name))
     safe = text.replace("```", "ˋˋˋ")
-    await interaction.followup.send(f"🎭 **{label}** (`{user.id}`) — {persona_kind(user.id)}:\n```\n{safe}\n```", ephemeral=True)
+    await interaction.followup.send(f"🎭 **{label}** (`{user.id}`):\n```\n{safe}\n```", ephemeral=True)
 
 
-@bot.tree.command(name="persona_delete", description="(Chủ nhân) Xóa chỉ dẫn riêng của một người dùng (hoặc đưa về mặc định)")
-@app_commands.describe(user="Người dùng cần xóa chỉ dẫn riêng")
+@bot.tree.command(name="persona_delete", description="(Chủ nhân) Xóa chỉ dẫn persona của một người dùng")
+@app_commands.describe(user="Người dùng cần xóa")
 @app_commands.check(_owner_only)
 async def slash_persona_delete(interaction: discord.Interaction, user: discord.User):
     await interaction.response.defer(ephemeral=True)
-    try:
-        removed = await delete_persona(user.id)
-    except Exception as e:
-        log.warning("Lỗi xóa chỉ dẫn riêng: %s", e)
-        await interaction.followup.send("❌ Xóa thất bại, cậu thử lại sau nhé.", ephemeral=True)
-        return
+    removed = await delete_persona(user.id)
     builtin = str(user.id) in BUILTIN_PERSONAS
     if removed and builtin:
-        msg = "🗑️ Đã xóa phần ghi đè; người này quay về chỉ dẫn mặc định tích hợp sẵn."
+        msg = "🗑️ Đã xóa ghi đè, trở về persona mặc định hệ thống."
     elif removed:
-        msg = "🗑️ Đã xóa chỉ dẫn riêng của người này."
+        msg = "🗑️ Đã xóa persona riêng thành công."
     elif builtin:
-        msg = "Người này đang dùng chỉ dẫn mặc định tích hợp sẵn và chưa có phần ghi đè nào để xóa. Muốn đổi nội dung hãy dùng `/persona_set`."
+        msg = "Người dùng đang sử dụng mặc định hệ thống, không có bản ghi đè để xóa."
     else:
-        msg = "Người này chưa có chỉ dẫn riêng."
+        msg = "Người dùng chưa từng có persona riêng."
     await interaction.followup.send(msg, ephemeral=True)
 
 
-@bot.tree.command(name="sync", description="Đồng bộ lệnh Slash (chỉ chủ nhân)")
+@bot.tree.command(name="sync", description="Đồng bộ lệnh Slash (Chỉ chủ nhân)")
 @app_commands.check(_owner_only)
 async def slash_sync_commands(interaction: discord.Interaction):
     await interaction.response.defer(ephemeral=True)
     try:
-        # Dọn lệnh "rác" gắn riêng cho server hiện tại (chỉ khi đang ở trong server —
-        # nếu guild=None thì clear_commands sẽ xóa nhầm lệnh GLOBAL)
         if interaction.guild is not None:
             bot.tree.clear_commands(guild=interaction.guild)
             await bot.tree.sync(guild=interaction.guild)
         synced = await bot.tree.sync()
-        await interaction.followup.send(
-            f"Đã dọn sạch lệnh rác và đồng bộ {len(synced)} lệnh. Vui lòng bấm Ctrl+R trên Discord để cập nhật giao diện."
-        )
+        await interaction.followup.send(f"✅ Đã dọn rác và đồng bộ {len(synced)} lệnh Slash thành công.")
     except Exception as e:
-        log.exception("Lỗi /sync")
-        await interaction.followup.send(f"Lỗi: {e}")
+        log.exception("Lỗi đồng bộ slash command")
+        await interaction.followup.send(f"Lỗi: {e}", ephemeral=True)
 
 
 # ==============================================================================
-# ĐIỂM KHỞI CHẠY
+# ĐIỂM KHỞI CHẠY HỆ THỐNG
 # ==============================================================================
 def run_bot():
-    """Chạy bot; nếu đăng nhập bị Discord/Cloudflare chặn (429) hoặc token sai (401) thì CHỜ LÂU trước khi thoát.
-    Lý do: nền tảng host (Render...) sẽ tự khởi động lại tiến trình ngay khi nó thoát, mỗi lần khởi động lại
-    là thêm một request lỗi gửi vào IP đang bị chặn. Web health-check vẫn chạy nên host không coi là sập."""
     try:
-        bot.run(DISCORD_TOKEN, log_handler=None)  # log đã cấu hình ở main()
+        bot.run(DISCORD_TOKEN, log_handler=None)
     except discord.LoginFailure:
-        log.error("🔑 Token Discord không hợp lệ (401). Kiểm tra lại DISCORD_TOKEN. Chờ %ss rồi mới thoát "
-                  "để host không khởi động lại liên tục.", LOGIN_BACKOFF_SEC)
+        log.error("🔑 DISCORD_TOKEN không hợp lệ. Đợi %ss trước khi thoát.", LOGIN_BACKOFF_SEC)
         time.sleep(LOGIN_BACKOFF_SEC)
         raise SystemExit(1)
     except discord.HTTPException as e:
         if getattr(e, "status", None) == 429:
-            log.error("🚫 Discord/Cloudflare đang chặn IP của host (429) khi đăng nhập. Thường do IP dùng chung "
-                      "với bot khác. Chờ %ss rồi mới thoát; nếu lặp lại, hãy đặt DISCORD_PROXY hoặc đổi host.",
-                      LOGIN_BACKOFF_SEC)
+            log.error("🚫 Đang bị Cloudflare chặn IP (429). Đợi %ss trước khi thoát.", LOGIN_BACKOFF_SEC)
             time.sleep(LOGIN_BACKOFF_SEC)
             raise SystemExit(1)
         raise
@@ -2150,17 +2030,14 @@ def main():
     if missing:
         raise SystemExit(f"Thiếu biến môi trường bắt buộc: {', '.join(missing)}")
 
-    # Mở cổng web NGAY (trước khi kết nối DB/Discord) để Render thấy cổng đang mở và không báo "No open ports detected"
     threading.Thread(target=run_web_server, daemon=True).start()
     init_sqlite()
     init_mongo()
 
     if not OWNER_ID:
-        log.warning("OWNER_ID chưa được đặt — dùng chủ sở hữu ứng dụng Discord làm chủ nhân. "
-                    "Nên đặt OWNER_ID=<user id của bạn> để chắc chắn.")
-
+        log.warning("Chưa cấu hình OWNER_ID, sẽ sử dụng chủ sở hữu ứng dụng Discord.")
     if DISCORD_PROXY:
-        log.info("🌐 Đang kết nối Discord qua proxy đã cấu hình.")  # không in URL vì có thể chứa mật khẩu
+        log.info("🌐 Đang sử dụng Discord Proxy.")
 
     run_bot()
 
