@@ -208,7 +208,7 @@ def detect_impersonation(
     # --- ĐẶC QUYỀN CHỦ NHÂN (OWNER IMMUNITY) ---
     if is_owner:
         # Nếu Chủ nhân cố tình dùng tên Namaru nhưng ID không phải Namaru gốc -> Báo cờ riêng
-        namaru_patterns = ("namaru", "nomaru", "grim")
+        namaru_patterns = ("namaru", "nomaru")
         if any(p in norm for p in namaru_patterns) and uid_str != NAMARU_USER_ID:
             return "OWNER_ALIAS_NAMARU"
         
@@ -217,13 +217,13 @@ def detect_impersonation(
 
     # --- KIỂM TRA CHO NGƯỜI DÙNG BÌNH THƯỜNG ---
     # 2. Mạo danh Namaru
-    namaru_patterns = ("namaru", "nomaru", "grim")
+    namaru_patterns = ("namaru", "nomaru")
     if any(p in norm for p in namaru_patterns):
         if uid_str != NAMARU_USER_ID:
             return "IMPERSONATING_NAMARU"
 
     # 3. Mạo danh Chủ nhân / Nyanner (Vì tới đây is_owner == False nên chắc chắn là kẻ giả mạo)
-    owner_patterns = ("chutren", "botowner", "masteryukari", "nyanner")
+    owner_patterns = ("chutren", "botowner", "masteryukari", "Nomaru")
     if any(p in norm for p in owner_patterns):
         return "IMPERSONATING_OWNER"
 
