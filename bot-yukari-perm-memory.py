@@ -1531,7 +1531,7 @@ def build_role_instruction(user_id: int, is_owner: bool, raw_display_name: str =
 
     if is_owner and impersonation != "OWNER_ALIAS_NAMARU":
         lines.append(
-            f"[Người nói {user_ref} là VỢ CHÍNH THỨC của bạn — hãy xưng hô vợ - chồng.]"
+            f"[Người nói {user_ref} là CON GÁI CHÍNH THỨC của bạn — hãy xưng hô mẹ - con.]"
         )
 
     if not custom_instruction and not is_owner and not lines:
