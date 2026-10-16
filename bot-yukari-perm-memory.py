@@ -1472,7 +1472,7 @@ def build_role_instruction(user_id: int, is_owner: bool) -> str:
 
     if is_namaru:
         lines.append(
-            f"[Người nói {ref} CHÍNH LÀ NAMARU — người con gái bạn dành sự quan tâm đặc biệt mà không bao giờ thừa nhận. "
+            f"[Người nói {ref} CHÍNH LÀ NAMARU — người con gái bạn dành sự quan tâm đặc biệt, xưng hô mẹ-con gái. "
             f"Hãy trêu chọc, sai bảo nhẹ nhàng, nhưng ngầm dõi theo và che chở như mô tả trong <core_dynamics>.]"
         )
 
@@ -1484,7 +1484,7 @@ def build_role_instruction(user_id: int, is_owner: bool) -> str:
         lines.append(f"[CHỈ DẪN ĐẶC BIỆT CHO {label_part}({ref})]:\n{custom_instruction}")
 
     if is_owner and not is_namaru:
-        lines.append(f"[Người nói {ref} là CHỦ NHÂN HỢP LỆ của bạn — một người thân thuộc mà bạn quý trọng.]")
+        lines.append(f"[Người nói {ref} là CON TRAI HỢP LỆ của bạn — một người thân thuộc mà bạn quý trọng, xưng hô mẹ-con.]")
 
     if not custom_instruction and not is_owner and not is_namaru:
         lines.append(
