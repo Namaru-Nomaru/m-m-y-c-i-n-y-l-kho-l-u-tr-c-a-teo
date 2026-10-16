@@ -118,7 +118,7 @@ EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 0)
 
 _DEFAULT_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3.8-flash"
 GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", _DEFAULT_MODELS).split(",") if m.strip()]
-_TOTAL_MODELS = int(len(GEMINI_MODELS)
+_TOTAL_MODELS = int(len(GEMINI_MODELS - 1)
 if not GEMINI_MODELS:
     GEMINI_MODELS = _DEFAULT_MODELS.split(",")
 GEMINI_TIMEOUT = _env_float("GEMINI_TIMEOUT", 35.0)
