@@ -1472,7 +1472,7 @@ def build_role_instruction(user_id: int, is_owner: bool) -> str:
 
     if is_namaru:
         lines.append(
-            f"[Người nói {ref} CHÍNH LÀ NAMARU — người bạn dành sự quan tâm đặc biệt mà không bao giờ thừa nhận. "
+            f"[Người nói {ref} CHÍNH LÀ NAMARU — người con gái bạn dành sự quan tâm đặc biệt mà không bao giờ thừa nhận. "
             f"Hãy trêu chọc, sai bảo nhẹ nhàng, nhưng ngầm dõi theo và che chở như mô tả trong <core_dynamics>.]"
         )
 
