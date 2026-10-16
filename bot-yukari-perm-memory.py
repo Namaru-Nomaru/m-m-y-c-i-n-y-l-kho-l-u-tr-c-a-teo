@@ -1816,7 +1816,7 @@ async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: b
         )
 
     if is_owner:
-        desc = f"Ara? Cậu vừa nói gì thế? Ta lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
+        desc = f"Ara? Con vừa nói gì thế? mẹ lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
     else:
         desc = f"Ufufu~ cậu vừa kể gì cho ta nghe vậy, {user_ref}? Thôi kệ đi, cứ để mọi chuyện trôi qua khe hở nào~{extra_msg}"
 
