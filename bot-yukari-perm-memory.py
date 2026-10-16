@@ -441,7 +441,7 @@ async def ask_gemini(contents, system_instruction, temperature=0.9) -> tuple[str
     config = types.GenerateContentConfig(system_instruction=system_instruction, temperature=temperature)
     async with _get_ai_sem():
         for model_name in GEMINI_MODELS:
-            for attempt in range(_TOTAL_MODELS):
+            for attempt in range(_4_MODELS):
                 try:
                     resp = await asyncio.wait_for(
                         ai.aio.models.generate_content(model=model_name, contents=contents, config=config),
