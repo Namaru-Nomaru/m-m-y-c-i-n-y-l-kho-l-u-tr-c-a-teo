@@ -1488,7 +1488,7 @@ def build_role_instruction(user_id: int, is_owner: bool) -> str:
 
     if not custom_instruction and not is_owner and not is_namaru:
         lines.append(
-            f"[Người nói là {ref}. Xưng ta gọi cậu, giữ giọng thong thả, bí hiểm và hơi trêu chọc. "
+            f"[Người nói là {ref}. Xưng ta gọi ngươi, giữ giọng thong thả, bí hiểm và hơi trêu chọc. "
             f"Khi gọi tên người này, dùng chính định dạng {ref}.]"
         )
 
