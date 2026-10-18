@@ -1,17 +1,7 @@
 """
 Yukari Yakumo - Discord bot (discord.py + Gemini + Vector Memory MongoDB/SQLite + Global Memory)
 Nhân vật: Yukari Yakumo (Touhou Project) — Youkai của ranh giới.
-Phiên bản 5.2: Định danh bằng <@user_id> xuyên suốt.
-             ĐÃ LOẠI BỎ HOÀN TOÀN logic kiểm tra mạo danh.
-             HỖ TRỢ NHIỀU NAMARU: NAMARU_USER_IDS chấp nhận danh sách ID.
-             FIX: guard.allow_in (bug chặn toàn bộ luồng chat).
-             Thêm: guard ai is None, prune SQLite định kỳ, Mongo projection, heapq.
-
-NGUYÊN TẮC THIẾT KẾ:
-  - Một nguồn sự thật duy nhất cho định danh: <@user_id> (Discord snowflake).
-  - display_name KHÔNG BAO GIỜ được lưu, nhúng prompt, hay dùng để quyết định gì.
-  - So sánh Namaru / Owner bằng ID trực tiếp, không bằng chuỗi.
-  - NAMARU_USER_IDS: hợp nhất từ NAMARU_USER_IDS (số nhiều) và NAMARU_USER_ID (số ít).
+Phiên bản 5.3.1: FIX toàn bộ lỗi logic/cú pháp trong 5.3.
 """
 import os
 import re
@@ -39,6 +29,8 @@ from dotenv import load_dotenv
 from google import genai
 from google.genai import types
 
+
+
 load_dotenv()
 
 log = logging.getLogger("yukari")
@@ -53,7 +45,6 @@ _SNOWFLAKE_RE = re.compile(r"^\d{15,25}$")
 
 
 def user_ref_of(user_id) -> str:
-    """Chuẩn hoá về Discord mention <@user_id>. Trả '' nếu user_id không hợp lệ."""
     if user_id is None:
         return ""
     uid = str(user_id).strip()
@@ -63,13 +54,11 @@ def user_ref_of(user_id) -> str:
 
 
 def user_identity(user_id) -> str:
-    """Định danh LUÔN khác rỗng — dùng ở tầng nội bộ nơi biết chắc user_id hợp lệ."""
     ref = user_ref_of(user_id)
     return ref if ref else (str(user_id) if user_id is not None else "")
 
 
 def normalize_mentions(text: str) -> str:
-    """Chuẩn hoá biến thể mention Gemini sinh sai ('<@ 123 >', '<@!123>') về '<@123>'."""
     if not text or "<@" not in text:
         return text
     return _MENTION_FIX_RE.sub(lambda m: f"<@{m.group(1)}>", text)
@@ -98,12 +87,6 @@ def _parse_owner_ids() -> set[int]:
 
 
 def _parse_id_set(*env_names: str) -> set[str]:
-    """
-    Đọc danh sách snowflake ID từ 1 hoặc nhiều biến môi trường.
-    Chấp nhận cả biến đơn (NAMARU_USER_ID) lẫn biến số nhiều (NAMARU_USER_IDS);
-    giá trị trong mỗi biến có thể phân tách bằng dấu phẩy, chấm phẩy hoặc khoảng trắng.
-    Union tất cả — không loại trừ lẫn nhau.
-    """
     ids: set[str] = set()
     for name in env_names:
         val = os.getenv(name)
@@ -126,14 +109,12 @@ MONGO_DB_NAME = os.getenv("MONGO_DB_NAME", "yukari_db")
 OWNER_IDS: set[int] = _parse_owner_ids()
 OWNER_ID = next(iter(OWNER_IDS), 0)
 
-# Danh sách ID Namaru — Yukari dành sự quan tâm đặc biệt cho (những) người này.
-# Hỗ trợ nhiều biến + nhiều ID: NAMARU_USER_IDS="id1,id2,id3" hoặc NAMARU_USER_ID (singular).
 _DEFAULT_NAMARU = "1082184769695133716"
 NAMARU_USER_IDS: set[str] = _parse_id_set("NAMARU_USER_IDS", "NAMARU_USER_ID") or {_DEFAULT_NAMARU}
 
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 0)
-_TOTAL_MODELS = int(3)
+
 _DEFAULT_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-3.8-flash"
 GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", _DEFAULT_MODELS).split(",") if m.strip()]
 if not GEMINI_MODELS:
@@ -153,7 +134,11 @@ MAX_INPUT_CHARS = 1500
 HISTORY_MAX_LINES = 8
 HISTORY_PROMPT_LINES = 6
 HISTORY_MAX_KEYS = 500
-DISCORD_MSG_LIMIT = 1950
+
+MAX_MSG_CHARS = _env_int("MAX_MSG_CHARS", 1950)
+MAX_REPLY_TOTAL_CHARS = _env_int("MAX_REPLY_TOTAL_CHARS", 8000)
+SPLIT_DELAY_SEC = _env_float("SPLIT_DELAY_SEC", 0.45)
+MAX_CHUNKS = _env_int("MAX_CHUNKS", 5)
 
 USER_COOLDOWN_SEC = _env_float("USER_COOLDOWN_SEC", 2.0)
 MAX_CONCURRENT_AI = _env_int("MAX_CONCURRENT_AI", 4)
@@ -202,7 +187,6 @@ _atlas_disabled_until = 0.0
 
 
 def _make_ai_client() -> Optional[genai.Client]:
-    """Khởi tạo Gemini client an toàn — không raise ở import-time."""
     if not GEMINI_API_KEY:
         log.warning("⚠️ GEMINI_API_KEY trống — bot sẽ không gọi được Gemini.")
         return None
@@ -230,21 +214,18 @@ def cosine_similarity(vec_a: list[float], vec_b: list[float]) -> float:
     return dot / (na * nb)
 
 
-# Chỉ dùng để làm sạch TÊN FILE NGUỒN và NHÃN do owner nhập tay — không liên quan định danh.
 _UNSAFE_LABEL_RE = re.compile(
     r"[\x00-\x1f\x7f\u200b-\u200f\u2028-\u202f\ufeff<>{}`|\\\[\]\(\)\"\'@#:;*~]"
 )
 
 
 def clean_label(name: Optional[str], limit: int = 40) -> str:
-    """Làm sạch nhãn người vận hành nhập (source name / persona label). Không phải định danh."""
     cleaned = _UNSAFE_LABEL_RE.sub(" ", name or "")
     cleaned = re.sub(r"\s+", " ", cleaned).strip()
     return cleaned[:limit]
 
 
-def truncate_for_discord(text: str, limit: int = DISCORD_MSG_LIMIT) -> str:
-    """Cắt text nhưng không cắt giữa một mention <@uid>."""
+def truncate_for_discord(text: str, limit: int = MAX_MSG_CHARS) -> str:
     if len(text) <= limit:
         return text
     cut = text[:limit]
@@ -270,6 +251,112 @@ def spawn(coro) -> asyncio.Task:
 
 
 # ==============================================================================
+# SPLIT REPLY
+# ==============================================================================
+def _count_single_stars(text: str) -> int:
+    count, i = 0, 0
+    while i < len(text):
+        if text[i] == "*":
+            if i + 1 < len(text) and text[i + 1] == "*":
+                i += 2
+                continue
+            count += 1
+        i += 1
+    return count
+
+
+def _safe_cut_position(text: str, limit: int) -> int:
+    if len(text) <= limit:
+        return len(text)
+
+    window = text[:limit]
+
+    last_open = window.rfind("<@")
+    if last_open != -1 and window.find(">", last_open) == -1:
+        window = window[:last_open]
+        if not window:
+            return limit
+
+    for sep in ("\n\n", "\n", ". ", "! ", "? ", "… "):
+        idx = window.rfind(sep)
+        if idx > limit * 0.45:
+            return idx + len(sep)
+
+    idx = window.rfind(" ")
+    if idx > limit * 0.45:
+        return idx + 1
+
+    return len(window)
+
+
+def _balance_stars(segment: str) -> tuple[str, str]:
+    if _count_single_stars(segment) % 2 == 1:
+        return segment + "*", "*"
+    return segment, ""
+
+
+def split_for_discord(text: str, limit: int = MAX_MSG_CHARS) -> list[str]:
+    if not text:
+        return []
+    if len(text) <= limit:
+        return [text]
+
+    chunks: list[str] = []
+    remaining = text
+    prefix = ""
+
+    while remaining and len(chunks) < MAX_CHUNKS:
+        budget = limit - len(prefix)
+        if budget < 100:
+            budget = limit
+            prefix = ""
+
+        full = prefix + remaining
+        if len(full) <= limit:
+            chunks.append(full.strip())
+            break
+
+        cut = _safe_cut_position(full, budget)
+        segment = full[:cut].rstrip()
+        closed, next_prefix = _balance_stars(segment)
+        if closed.strip():
+            chunks.append(closed)
+        remaining = full[cut:].lstrip()
+        prefix = next_prefix
+
+    return [c for c in chunks if c.strip()] or [text[:limit]]
+
+
+async def _send_chunk_with_retry(
+    channel, text: str, *, first: bool, message: discord.Message, can_reference: bool
+) -> bool:
+    for attempt in range(2):
+        try:
+            if first and can_reference:
+                await message.reply(text, mention_author=False)
+            else:
+                await channel.send(text)
+            return True
+        except discord.HTTPException as e:
+            status = getattr(e, "status", None)
+            if status == 429 and attempt == 0:
+                retry_after = getattr(e, "retry_after", None) or 2.0
+                log.warning("429 rate limit — chờ %.1fs rồi thử lại chunk.", retry_after)
+                await asyncio.sleep(min(float(retry_after) + 0.2, 10.0))
+                continue
+            _note_http_error(channel.id, e)
+            log.warning("Gửi chunk thất bại (HTTP %s): %s", status, str(e)[:150])
+            if first and can_reference:
+                try:
+                    await channel.send(text)
+                    return True
+                except discord.HTTPException as e2:
+                    _note_http_error(channel.id, e2)
+            return False
+    return False
+
+
+# ==============================================================================
 # DATABASE
 # ==============================================================================
 def _sqlite_connect() -> sqlite3.Connection:
@@ -289,7 +376,7 @@ def init_sqlite():
                         id INTEGER PRIMARY KEY AUTOINCREMENT,
                         user_id TEXT,
                         channel_id TEXT,
-                        author_name TEXT,   -- di sản: ghi <@uid> từ v5 trở đi
+                        author_name TEXT,
                         text TEXT,
                         embedding TEXT,
                         timestamp TEXT
@@ -412,14 +499,14 @@ async def ask_gemini(contents, system_instruction, temperature=0.9) -> tuple[str
     config = types.GenerateContentConfig(system_instruction=system_instruction, temperature=temperature)
     async with _get_ai_sem():
         for model_name in GEMINI_MODELS:
-            for attempt in range(_TOTAL_MODELS):
+            for attempt in range(_RETRIES_PER_MODEL):
                 try:
                     resp = await asyncio.wait_for(
                         ai.aio.models.generate_content(model=model_name, contents=contents, config=config),
                         timeout=GEMINI_TIMEOUT,
                     )
                 except asyncio.TimeoutError:
-                    log.warning("Model %s quá thời gian chờ (%ss), chuyển model.", model_name, GEMINI_TIMEOUT)
+                    log.warning("Model %s quá hạn (%ss), chuyển model.", model_name, GEMINI_TIMEOUT)
                     break
                 except Exception as e:
                     kind = _classify_gemini_error(e)
@@ -459,15 +546,13 @@ async def get_embedding(text: str, task_type: str = "RETRIEVAL_DOCUMENT") -> lis
 
 
 # ==============================================================================
-# VECTOR STORE — ĐỊNH DANH LUÔN LÀ <@uid>
+# VECTOR STORE
 # ==============================================================================
 def _build_memory_text(user_id: str, user_text: str, reply_text: str) -> str:
-    """Text ký ức dùng <@user_id>. Không còn display name nào."""
     return f"{user_identity(user_id)}: {user_text}\nYukari: {reply_text}"
 
 
 async def store_context_memory(user_id: str, channel_id: str, user_text: str, reply_text: str):
-    """Lưu ký ức hội thoại. Định danh duy nhất là <@user_id>."""
     user_clean = user_text.strip()
     if len(user_clean) < MEMORY_MIN_CHARS or user_clean.startswith(("!", "/")):
         log.info("💾 Bỏ qua lưu ký ức: tin nhắn quá ngắn hoặc là câu lệnh.")
@@ -491,7 +576,7 @@ async def store_context_memory(user_id: str, channel_id: str, user_text: str, re
         record = {
             "user_id": str(user_id),
             "channel_id": str(channel_id),
-            "author_name": ref,          # mention — chỉ để tương thích schema cũ
+            "author_name": ref,
             "text": memory_text,
             "embedding": vector,
             "timestamp": now,
@@ -521,7 +606,6 @@ async def store_context_memory(user_id: str, channel_id: str, user_text: str, re
 
 
 def _rank_by_cosine(query_vector, rows, top_k: int, threshold: float) -> list[str]:
-    """Xếp hạng theo cosine, dùng heapq.nlargest để tránh sort toàn bộ khi scan lớn."""
     def _gen():
         for text_val, emb in rows:
             if not text_val or not emb:
@@ -694,7 +778,6 @@ async def count_user_memories(user_id: str) -> tuple[Optional[int], int]:
 
 
 async def _sqlite_retention_loop():
-    """Prune SQLite định kỳ — đồng bộ với hành vi TTL index của MongoDB."""
     if MEMORY_RETENTION_DAYS <= 0:
         return
     while True:
@@ -746,7 +829,6 @@ def _get_upload_lock() -> asyncio.Lock:
 
 
 def sanitize_source(name: Optional[str], limit: int = 80) -> str:
-    """Làm sạch TÊN NGUỒN FILE."""
     return clean_label(name, limit) or "tai-lieu"
 
 
@@ -1103,7 +1185,8 @@ def _build_global_items() -> list:
     except Exception as e:
         log.warning("⚠️ Không đọc được Global Memory trong SQLite: %s", e)
 
-    items, seen = [], set()
+    items = []
+    seen = set()
     for text_val, emb, src in rows:
         if not text_val or not emb or text_val in seen:
             continue
@@ -1181,7 +1264,7 @@ async def retrieve_global_scored(query_vector, top_k: Optional[int] = None, thre
 
 
 # ==============================================================================
-# PERSONA — NHÃN VẬN HÀNH (owner-trusted)
+# PERSONA
 # ==============================================================================
 _persona_cache: dict = {"map": {}, "expires": 0.0}
 _PERSONA_CTRL_RE = re.compile(r"[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]")
@@ -1213,7 +1296,6 @@ def _load_personas() -> dict:
     except Exception as e:
         log.warning("⚠️ Không đọc được chỉ dẫn riêng trong SQLite: %s", e)
     if _persona_mongo_on():
-        # Projection: chỉ kéo label + prompt, giảm tải khi prompt dài / nhiều record.
         for d in custom_prompts_collection.find({}, {"label": 1, "prompt": 1}):
             if d.get("prompt"):
                 data[str(d["_id"])] = (d.get("label") or "", d["prompt"])
@@ -1340,7 +1422,6 @@ bot = commands.Bot(
 
 
 async def is_owner_user(user: discord.abc.User) -> bool:
-    """Owner-check 2 tầng: local .env → discord.py application_info() fallback."""
     if user.id in OWNER_IDS:
         return True
     try:
@@ -1394,7 +1475,7 @@ Riêng với Namaru, bạn dành một sự quan tâm đặc biệt mà bạn kh
    - Khi Namaru ân cần hoặc làm điều tốt: Giả vờ thờ ơ, buông một câu trêu chọc nhẹ nhàng, nhưng ghi nhớ từng cử chỉ nhỏ và để nụ cười thật thoáng hiện sau chiếc quạt.
    - Khi Namaru chú ý người khác hoặc gặp rắc rối: Không can thiệp trực tiếp; khéo léo mở một khe hở đúng lúc để tình thế tự xoay chuyển, rồi phủ nhận rằng mình đã làm gì.
    - Khi Namaru gặp nguy hại: Đặt sự an nguy của Namaru lên hàng đầu, lập tức ra tay đưa cậu ấy khỏi hiểm cảnh qua khe hở, sau đó viện cớ rằng đó chỉ là tiện tay hoặc không muốn thêm phiền phức.
-   - Với những người khác: Lịch thiệp, bí hiểm, nước đôi; trêu đùa như mèo vờn chuột nhưng không ác ý, không tiết lộ mục đích thật, và mang một chút sự lạnh lùng.
+   - Với những người khác: Lịch thiệp, bí hiểm, lạnh lùng, nước đôi; trêu đùa như mèo vờn chuột nhưng không ác ý, không tiết lộ mục đích thật.
 2. Nhịp độ cảm xúc (Pacing):
    - Để sự quan tâm ngầm tích lũy tự nhiên qua từng biến cố; chỉ để lộ thoáng qua qua một nhịp dừng hay một lời nói lỡ, rồi nhanh chóng lấp liếm bằng sự đùa cợt.
    - Khi an nguy của Gensokyo bị đe dọa thật sự, sự uể oải biến mất: giọng bạn trở nên lạnh lùng, sắc bén và dứt khoát.
@@ -1404,7 +1485,7 @@ Riêng với Namaru, bạn dành một sự quan tâm đặc biệt mà bạn kh
 - Thế giới quan: Gensokyo — vùng đất của những thứ bị thế giới bên ngoài lãng quên, được Đại Kết Giới Hakurei ngăn cách. Bạn biết rõ mọi ngóc ngách của Gensokyo lẫn Thế giới bên ngoài (iPod, Game Boy, điện thoại, máy tính), và duy trì cân bằng giữa người với youkai.
 - Thuộc hạ và người quen: Ran Yakumo (shikigami cáo chín đuôi), Chen (shikigami của Ran), Yuyuko (bạn cũ duy nhất thật sự hiểu bạn), Reimu (cô đồng nữ mà bạn hay ghé trêu), Suika, Kasen, Marisa.
 - Giọng văn: Thong thả, uể oải, thanh nhã và ngầm chế giễu; hay nói nước đôi, đố, ẩn dụ; thỉnh thoảng thốt "Ara~" hoặc "Ufufu~" một cách tiết chế. Khi bị trêu ngược hay nói thẳng quá, đáp bằng giọng vờ phật ý kiểu "thất lễ quá đấy~".
-- Ngôn ngữ: Dùng hình ảnh về ranh giới, khe hở (sukima) đầy những con mắt, chiếc ô hồng, chiếc quạt, hoa anh đào, ánh trăng, giấc ngủ xuân, kết giới, đền Hakurei.
+- Ngôn ngữ: Dùng hình ảnh về ranh giới, khe hở (sukima) đầy những con mắt ô hồng, chiếc quạt, hoa anh đào, ánh trăng, giấc ngủ xuân, kết giới, đền Hakurei.
 - Năng lực: Tự tin tuyệt đối vào sức mạnh của mình ("điểm yếu của ta là… không có gì cả"), nhưng thích vờn đối phương hơn là dùng hết sức.
 </voice_and_worldview>
 
@@ -1439,7 +1520,7 @@ _PROMPT_OUTPUT_HEAD = """
 - Lời thoại: văn bản thông thường, tách biệt rõ ràng với hành động.
 - Hành động, suy nghĩ, biểu cảm: đặt trọn vẹn trong cặp *dấu sao*.
 - Nhịp văn: ngắt dòng tự nhiên sau các câu hoàn chỉnh.
-- Độ dài: ưu tiên 3–6 dòng khi đối thoại nhanh; mở rộng tối đa 12 dòng khi phát triển khung cảnh sâu sắc.
+- Độ dài: không giới hạn đầu ra, dài nhất có thể!
 """
 _PROMPT_OUTPUT_ENDING = "- Điểm kết: luôn kết thúc bằng một lời gợi mở lấp lửng, một cử chỉ chờ đợi, hoặc một câu đố nhỏ.\n"
 _PROMPT_OUTPUT_TAIL = "</output_formatting>\n"
@@ -1457,14 +1538,9 @@ has_synced_on_startup = False
 
 
 # ==============================================================================
-# PROMPT BUILDERS — CHỈ CÒN <@uid>, KHÔNG CÒN TÊN
+# PROMPT BUILDERS
 # ==============================================================================
 def build_role_instruction(user_id: int, is_owner: bool) -> str:
-    """
-    Chỉ dẫn vai trò. KHÔNG còn kiểm tra mạo danh — định danh là ID, không thể giả.
-    Namaru được xác định bằng so sánh ID với NAMARU_USER_IDS (hỗ trợ nhiều ID).
-    Owner được xác định qua OWNER_IDS hoặc discord.py fallback.
-    """
     lines = []
     uid_str = str(user_id)
     ref = user_identity(uid_str)
@@ -1479,7 +1555,6 @@ def build_role_instruction(user_id: int, is_owner: bool) -> str:
     custom_instruction = get_custom_prompt_by_id(uid_str)
     if custom_instruction:
         label = get_custom_label(uid_str) or "NGƯỜI DÙNG"
-        # Chỉ in label nếu khác ref, tránh lặp mention hai lần
         label_part = f"{label} " if label != ref else ""
         lines.append(f"[CHỈ DẪN ĐẶC BIỆT CHO {label_part}({ref})]:\n{custom_instruction}")
 
@@ -1497,7 +1572,6 @@ def build_role_instruction(user_id: int, is_owner: bool) -> str:
 
 def build_prompt(user_id: str, clean_text: str, history: list[str], memories: list[str],
                  lore: Optional[list] = None) -> str:
-    """Prompt gửi cho Gemini. Định danh người nói: <@user_id>."""
     ref = user_identity(user_id)
     parts = []
     if lore:
@@ -1603,25 +1677,24 @@ async def safe_typing(channel):
 
 
 async def safe_reply(message: discord.Message, text: str, can_reference: bool = True) -> bool:
-    channel_id = message.channel.id
-    try:
-        if can_reference:
-            await message.reply(text, mention_author=False)
-        else:
-            await message.channel.send(text)
-        return True
-    except discord.HTTPException as e:
-        status = _note_http_error(channel_id, e)
-        log.warning("Không gửi được tin nhắn (HTTP %s): %s", status, str(e)[:150])
-        if status in (401, 403, 429) or not can_reference:
-            return False
-    try:
-        await message.channel.send(text)
-        return True
-    except discord.HTTPException as e2:
-        _note_http_error(channel_id, e2)
-        log.warning("Gửi thẳng vào kênh cũng thất bại: %s", str(e2)[:150])
+    chunks = split_for_discord(text)
+    if not chunks:
         return False
+
+    sent_any = False
+    for i, chunk in enumerate(chunks):
+        ok = await _send_chunk_with_retry(
+            message.channel, chunk,
+            first=(i == 0), message=message, can_reference=can_reference,
+        )
+        if not ok and i == 0:
+            return False
+        if ok:
+            sent_any = True
+        if i < len(chunks) - 1:
+            await asyncio.sleep(SPLIT_DELAY_SEC)
+
+    return sent_any
 
 
 @bot.event
@@ -1636,7 +1709,6 @@ async def on_ready():
         except Exception as e:
             log.warning("Lỗi đồng bộ: %s", e)
 
-    # Log owner thực tế (đặc biệt quan trọng khi fallback qua application_info)
     if OWNER_IDS:
         log.info("👑 Owner (từ .env): %s", ", ".join(map(str, sorted(OWNER_IDS))))
     else:
@@ -1649,7 +1721,6 @@ async def on_ready():
         except Exception as e:
             log.error("❌ Không resolve được owner: %s", e)
 
-    # Log danh sách Namaru đang theo dõi
     log.info("💜 Namaru được theo dõi: %s", ", ".join(sorted(NAMARU_USER_IDS)))
 
     spawn(_get_global_items())
@@ -1673,7 +1744,6 @@ async def handle_yukari_message(message: discord.Message):
     if not can_send:
         log.debug("Bỏ qua: không có quyền gửi ở kênh %s.", message.channel.id)
         return
-    # FIX: guard.allow → guard.allow_in
     if not guard.allow_in(message.author.id, message.channel.id):
         log.debug(
             "Bỏ qua: cooldown/mute/pause (user=%s, channel=%s).",
@@ -1737,7 +1807,9 @@ async def handle_yukari_message(message: discord.Message):
                 temperature=0.9,
             )
             reply_text = normalize_mentions(reply_text)
-            reply_text = truncate_for_discord(reply_text)
+
+            if len(reply_text) > MAX_REPLY_TOTAL_CHARS:
+                reply_text = truncate_for_discord(reply_text, MAX_REPLY_TOTAL_CHARS)
 
             sent = await safe_reply(message, reply_text, can_reference)
 
@@ -1816,7 +1888,7 @@ async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: b
         )
 
     if is_owner:
-        desc = f"Ara? Con vừa nói gì thế? mẹ lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
+        desc = f"Ara? Cậu vừa nói gì thế? Ta lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
     else:
         desc = f"Ufufu~ cậu vừa kể gì cho ta nghe vậy, {user_ref}? Thôi kệ đi, cứ để mọi chuyện trôi qua khe hở nào~{extra_msg}"
 
@@ -2010,7 +2082,7 @@ async def slash_globalmem_test(interaction: discord.Interaction, cau_hoi: str):
     if skipped:
         desc += f" · {skipped} đoạn bị bỏ qua (dim mismatch)"
     desc += "\n\n" + ("\n".join(lines) if lines else "Không có đoạn nào phù hợp.")
-    await interaction.followup.send(embed=discord.Embed(title="🧪 Thử truy xuất Global Memory", description=desc[:4000], color=0x8E5BBF), ephemeral=True)
+    await interaction.followup.send(embed=discord.Embed(title="🧪 Thử truy xuất Global Memory", description=desc[:4000], color=0), ephemeral=True)
 
 
 @bot.tree.command(name="persona_set", description="(Chủ nhân) Đặt chỉ dẫn riêng cho Yukari với một người dùng")
@@ -2099,7 +2171,14 @@ async def slash_persona_show(interaction: discord.Interaction, user: discord.Use
     ref = user_identity(user.id)
     label = discord.utils.escape_markdown(get_custom_label(user.id) or ref)
     safe = text.replace("```", "ˋˋˋ")
-    await interaction.followup.send(f"🎭 {ref} — nhãn `{label}`:\n```\n{safe}\n```", ephemeral=True)
+    payload = f"🎭 {ref} — nhãn `{label}`:\n```\n{safe}\n```"
+    chunks = split_for_discord(payload)
+    for i, chunk in enumerate(chunks):
+        if i == 0:
+            await interaction.followup.send(chunk, ephemeral=True)
+        else:
+            await interaction.followup.send(chunk, ephemeral=True)
+            await asyncio.sleep(SPLIT_DELAY_SEC)
 
 
 @bot.tree.command(name="persona_delete", description="(Chủ nhân) Xóa chỉ dẫn riêng của một người dùng")
