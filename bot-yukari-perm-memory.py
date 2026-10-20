@@ -115,7 +115,7 @@ NAMARU_USER_IDS: set[str] = _parse_id_set("NAMARU_USER_IDS", "NAMARU_USER_ID") o
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 0)
 
-_DEFAULT_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3.8-flash"
+_DEFAULT_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-3.8-flash"
 GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", _DEFAULT_MODELS).split(",") if m.strip()]
 if not GEMINI_MODELS:
     GEMINI_MODELS = [m.strip() for m in _DEFAULT_MODELS.split(",") if m.strip()]
