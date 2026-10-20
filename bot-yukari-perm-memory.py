@@ -115,7 +115,7 @@ NAMARU_USER_IDS: set[str] = _parse_id_set("NAMARU_USER_IDS", "NAMARU_USER_ID") o
 EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "gemini-embedding-001")
 EMBEDDING_DIM = _env_int("EMBEDDING_DIM", 0)
 
-_DEFAULT_MODELS = "gemini-3.5-flash-lite,gemini-3.1-flash-lite,gemini-3.6-flash,gemini-3.8-flash"
+_DEFAULT_MODELS = "gemini-3.1-flash-lite,gemini-3.5-flash-lite,gemini-3.6-flash,gemini-3.8-flash"
 GEMINI_MODELS = [m.strip() for m in os.getenv("GEMINI_MODELS", _DEFAULT_MODELS).split(",") if m.strip()]
 if not GEMINI_MODELS:
     GEMINI_MODELS = [m.strip() for m in _DEFAULT_MODELS.split(",") if m.strip()]
@@ -1888,9 +1888,9 @@ async def slash_clear_memory(interaction: discord.Interaction, xoa_ca_kho_nho: b
         )
 
     if is_owner:
-        desc = f"Ara? Cậu vừa nói gì thế? Ta lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
+        desc = f"Ara? Con vừa nói gì thế? Mẹ lỡ chợp mắt mất rồi… Mà thôi, cứ để ranh giới xóa nhòa đi vậy.{extra_msg}"
     else:
-        desc = f"Ufufu~ cậu vừa kể gì cho ta nghe vậy, {user_ref}? Thôi kệ đi, cứ để mọi chuyện trôi qua khe hở nào~{extra_msg}"
+        desc = f"Ufufu~ Ngươi vừa kể gì cho ta nghe vậy, {user_ref}? Thôi kệ đi, cứ để mọi chuyện trôi qua khe hở nào~{extra_msg}"
 
     await interaction.followup.send(embed=discord.Embed(title="🧹 Làm Mới Trạng Thái", description=desc, color=0x2C2F33))
 
